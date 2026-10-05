@@ -1,0 +1,7 @@
+# 默认不把实验输出纳入 Git（除非明确要保存少量示例）
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
