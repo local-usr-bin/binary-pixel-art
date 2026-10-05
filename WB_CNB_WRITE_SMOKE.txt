@@ -1,1 +1,0 @@
-WB -> CNB write smoke passed.
