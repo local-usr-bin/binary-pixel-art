@@ -568,7 +568,7 @@ class App(ttk.Frame):
             title="保存 PNG",
             defaultextension=".png",
             initialfile=default_name,
-            filetypes=[("PNG 图片", "*.png"), ("所有文件", "*.*")],
+            filetypes=[("PNG 图片", "*.png")],
         )
         if not path:
             # 用户取消：不写文件、不报错、状态不变
@@ -577,6 +577,8 @@ class App(ttk.Frame):
 
     def _save_result_to(self, path, result):
         """执行保存并更新状态栏（供 on_save 与测试直接调用）。"""
+        # 扩展名归一化：杜绝「非 .png 文件名但内部是 PNG」的文件
+        path = save_mod.normalize_png_path(path)
         try:
             save_mod.save_png(path, result)
         except Exception as exc:  # noqa: BLE001 —— 任何保存异常都要提示且不崩溃

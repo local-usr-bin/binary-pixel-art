@@ -166,6 +166,35 @@ def main():
           os.path.exists(p2) and np.array_equal(
               np.array(Image.open(p2)), app.state.generated_result[:, :, ::-1]))
 
+    # ---- 扩展名归一化：注入 foo.jpg，应实际写成 foo.png ----
+    base = "/tmp/gui_b2_out/ext"
+    for e in (".jpg", "", ".PNG"):
+        os.makedirs(base, exist_ok=True)
+    wrong = base + "/foo.jpg"
+    if os.path.exists(wrong):
+        os.remove(wrong)
+    app_mod.filedialog.asksaveasfilename = lambda **k: wrong
+    app.on_save()
+    pump(root, 0.2)
+    check("注入 foo.jpg -> 实际写成 foo.png（不生成 .jpg）",
+          (not os.path.exists(wrong)) and os.path.exists(base + "/foo.png"))
+    check("归一化后仍像素一致",
+          np.array_equal(np.array(Image.open(base + "/foo.png")),
+                         app.state.generated_result[:, :, ::-1]))
+
+    noext = base + "/bar"
+    app_mod.filedialog.asksaveasfilename = lambda **k: noext
+    app.on_save()
+    pump(root, 0.2)
+    check("注入无扩展名 bar -> 实际写成 bar.png",
+          os.path.exists(base + "/bar.png"))
+
+    up = base + "/baz.PNG"
+    app_mod.filedialog.asksaveasfilename = lambda **k: up
+    app.on_save()
+    pump(root, 0.2)
+    check("注入 baz.PNG -> 保留 .PNG 且保存成功", os.path.exists(up))
+
     # ---- 截图（不 commit） ----
     pump(root, 0.3)
     os.system(f"import -window {root.winfo_id()} /tmp/gui_v1_b2_smoke.png 2>/dev/null")

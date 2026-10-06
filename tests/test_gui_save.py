@@ -31,7 +31,10 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from gui.save import default_filename, save_png, read_png_pixels, MODE_SHORT_NAMES
+from gui.save import (
+    default_filename, save_png, read_png_pixels, normalize_png_path,
+    MODE_SHORT_NAMES,
+)
 from gui.state import AppState
 from gui.worker import run_mode
 
@@ -300,6 +303,63 @@ def test_read_png_helper(tmp_path):
     p = tmp_path / "h.png"
     Image.fromarray(img).save(str(p))
     assert read_png_pixels(p).shape == (5, 6, 3)
+
+
+# ---------------------------------------------------------------------------
+# 17. PNG 扩展名归一化（fix: enforce PNG save extension）
+# ---------------------------------------------------------------------------
+
+def test_17_normalize_no_extension():
+    assert normalize_png_path("foo") == "foo.png"
+    assert normalize_png_path("/a/b/bar") == "/a/b/bar.png"
+
+
+def test_17_normalize_png_accepted():
+    assert normalize_png_path("foo.png") == "foo.png"
+    assert normalize_png_path("foo.PNG") == "foo.PNG"     # 大小写接受，保留原写法
+    assert normalize_png_path("foo.Png") == "foo.Png"
+
+
+def test_17_normalize_other_ext_replaced():
+    assert normalize_png_path("foo.jpg") == "foo.png"
+    assert normalize_png_path("foo.jpeg") == "foo.png"
+    assert normalize_png_path("foo.bmp") == "foo.png"
+    assert normalize_png_path("foo.webp") == "foo.png"
+    assert normalize_png_path("/a/b/c.gif") == "/a/b/c.png"
+
+
+def test_17_normalize_unicode_and_wrong_ext():
+    assert normalize_png_path("照片.jpg") == "照片.png"
+    assert normalize_png_path("目录/结果.jpeg") == "目录/结果.png"
+    assert normalize_png_path("照片") == "照片.png"
+
+
+def test_17_normalize_keeps_only_png_then_saves(tmp_path):
+    """错误扩展名归一化后写出的确实是 PNG（内容与扩展名一致）。"""
+    st = _state_with_source()
+    _, result = _run(st)
+    target = tmp_path / "foo.jpg"
+    path = normalize_png_path(str(target))
+    assert path.endswith(".png")
+    save_png(path, result)
+    assert not target.exists()                  # 不生成 .jpg
+    assert tmp_path.joinpath("foo.png").exists()
+    with Image.open(str(tmp_path / "foo.png")) as im:
+        assert im.format == "PNG"
+        back = np.array(im)
+    assert np.array_equal(back, result[:, :, ::-1])   # 像素一致
+
+
+def test_17_no_extension_saves_png(tmp_path):
+    st = _state_with_source()
+    _, result = _run(st)
+    path = normalize_png_path(str(tmp_path / "foo"))
+    save_png(path, result)
+    out = tmp_path / "foo.png"
+    assert out.exists()
+    with Image.open(str(out)) as im:
+        assert im.format == "PNG"
+    assert np.array_equal(read_png_pixels(out), result[:, :, ::-1])
 
 
 # ---------------------------------------------------------------------------

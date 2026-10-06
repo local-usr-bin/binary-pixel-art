@@ -28,6 +28,27 @@ MODE_SHORT_NAMES = {
 }
 
 
+def normalize_png_path(path) -> str:
+    """把用户输入路径规范为 `.png` 结尾，保证「扩展名 = 实际格式」。
+
+    规则：
+      - 无扩展名        -> 追加 `.png`（foo -> foo.png）
+      - `.png` / `.PNG` -> 接受（大小写不敏感，保留原写法）
+      - 其它扩展名      -> 替换为 `.png`（foo.jpg -> foo.png）
+
+    仅处理扩展名，不改动目录与主文件名，天然支持 Unicode 路径。
+    返回 str 路径。
+    """
+    p = Path(path)
+    ext = p.suffix
+    if ext == "":
+        return str(p) + ".png"
+    if ext.lower() == ".png":
+        return str(p)
+    # 其它扩展名（.jpg/.jpeg/.bmp/... 或用户乱写）-> 一律替换为 .png
+    return str(p.with_suffix(".png"))
+
+
 def default_filename(source_path, mode: str) -> str:
     """根据 source 文件名 stem + mode 生成建议文件名。
 
