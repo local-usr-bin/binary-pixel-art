@@ -5,3 +5,7 @@ outputs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# PyInstaller 构建产物
+build/
+dist/

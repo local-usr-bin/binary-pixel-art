@@ -1,3 +1,5 @@
-# Development / test dependencies（继承 runtime，另加测试工具）。
+# Development / test / build dependencies（继承 runtime，另加测试与打包工具）。
 -r requirements.txt
 pytest
+# Windows 打包：版本来自已在 Windows 真机验证成功的 PyInstaller build。
+pyinstaller==6.22.3

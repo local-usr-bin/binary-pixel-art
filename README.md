@@ -68,3 +68,18 @@ python -m pytest tests/ -v
 
 Runtime 第三方依赖（见 `requirements.txt`）：`numpy`、`opencv-python`、`Pillow`；
 测试用 `pytest`（见 `requirements-dev.txt`）。不使用任何 AI / 神经网络依赖。
+
+## Windows 打包（开发者）
+
+Windows Packaging Trial 已在真机验证成功；仓库现提供可复现的 build configuration。
+
+前置：Windows 11 x64 + Python 3.13，并安装 `requirements-dev.txt`
+（含 `pyinstaller==6.22.3`）。然后在已准备好的环境中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build_windows.ps1
+```
+
+脚本调用 `binary-pixel-art.spec`（onedir + windowed），产物位于
+`dist/binary-pixel-art/`。PyInstaller 非交叉编译器，正式 Windows 产物必须在
+Windows 上构建。
