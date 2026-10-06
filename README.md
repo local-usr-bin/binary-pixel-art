@@ -17,8 +17,9 @@ Strict black-and-white pseudo-pixel image processing project.
 - `docs/modern_round1.md` — Modern 第一轮实验记录（历史参考）
 - `docs/WB_WORKFLOW.md` — WB 沙箱 / CNB 协作约定
 - `src/` — 算法实现（`FORMAL_MODES` 注册正式四模式；其余为实验/基准实现）
+- `gui/` — Tkinter GUI（`gui.state` 会话状态、`gui.app` 主界面；本轮为骨架 GUI-001A）
 - `tools/` — 实验入口与程序化测试图生成
-- `tests/` — 正式模式 / 回归 / legacy 未改 测试
+- `tests/` — 正式模式 / 回归 / legacy 未改 / GUI 状态 测试
 - `outputs/` — 实验输出（默认不进 Git）
 
 ## 快速开始
@@ -37,6 +38,15 @@ python3.11 -m tools.run_experiment /path/to/your_image.png -o outputs
 ```
 
 会输出 `classic / bayer4 / adaptive_fine / adaptive_bold` 四张严格黑白图，外加一张 2×2 contact sheet 便于并排比较。
+
+## GUI（骨架）
+
+```bash
+python3.11 -m gui.app
+```
+
+当前为 **GUI-001A 骨架轮**：图片打开、Source Preview、四模式参数面板与参数状态。
+Generate Preview / Save PNG 为未接线占位（disabled），不含正式生成与保存。
 
 ## 测试
 
