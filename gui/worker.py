@@ -30,9 +30,15 @@ def _get_backend(mode):
 
 
 def run_mode(mode, params, source_bgr):
-    """按模式调用正式后端 API，返回严格黑白 BGR 结果。
+    """按模式调用正式后端 API，返回最终结果。
 
-    仅做参数透传，不含任何算法逻辑副本。
+    流程（Color Fill 是统一下游 renderer，不进入四算法内部）：
+
+        run_mode(...) -> binary result（已含 invert 语义）
+            if not color_fill:  返回 binary result
+            else:               apply_color_fill(source_bgr, binary_result)
+
+    仅做参数透传与下游渲染组合，不含任何算法逻辑副本。
     """
     fn = _get_backend(mode)
     common = dict(
@@ -41,15 +47,23 @@ def run_mode(mode, params, source_bgr):
         invert=params.get("invert", False),
     )
     if mode == "classic":
-        return fn(source_bgr, t=params["t"], b=params["b"],
-                  equalize=params["equalize"], **common)
-    if mode == "bayer4":
-        return fn(source_bgr, matrix_size=params["matrix_size"],
-                  tone_bias=params["tone_bias"], **common)
-    if mode in ("adaptive_fine", "adaptive_bold"):
-        return fn(source_bgr, block_size=params["block_size"],
-                  c=params["c"], **common)
-    raise ValueError(f"未知模式: {mode}")
+        binary = fn(source_bgr, t=params["t"], b=params["b"],
+                    equalize=params["equalize"], **common)
+    elif mode == "bayer4":
+        binary = fn(source_bgr, matrix_size=params["matrix_size"],
+                    tone_bias=params["tone_bias"], **common)
+    elif mode in ("adaptive_fine", "adaptive_bold"):
+        binary = fn(source_bgr, block_size=params["block_size"],
+                    c=params["c"], **common)
+    else:
+        raise ValueError(f"未知模式: {mode}")
+
+    if not params.get("color_fill", False):
+        return binary
+
+    # 统一下游 renderer：只服从 invert 后的最终 mask，不复制算法逻辑
+    from src.render import apply_color_fill
+    return apply_color_fill(source_bgr, binary)
 
 
 class GenerationWorker:

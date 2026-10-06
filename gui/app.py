@@ -1,13 +1,13 @@
-"""GUI v1 主界面（Tkinter + ttk）—— GUI-001B1。
+"""GUI v1 主界面（Tkinter + ttk）。
 
-本轮在 GUI-001A 骨架上接通正式 Generate Preview：
 - 后台 worker thread 生成正式 full-resolution 结果（调用 src 后端，不复制算法）；
 - Result Preview 显示结果（display fit，二值 nearest）；
 - current / stale 状态（GenerationKey）、生成状态反馈、busy 期间禁用控件；
 - 参数改变/切模式/换图 -> stale（保留旧结果）；参数改回 -> 自动 current；
-- resize 只重新 fit，不重跑算法。
-
-本轮仍**不**实现 Save PNG（按钮 disabled，enable 逻辑已预留）、不打包。
+- resize 只重新 fit，不重跑算法；
+- Save PNG：current-only 保存 full-resolution 结果；
+- Color Fill：全局输出渲染开关（默认 OFF，跨模式保持），
+  开启时由 worker 在 mask 之后调用 src.render.apply_color_fill 叠加原图色彩。
 
 调用：python3.11 -m gui.app
 """
@@ -162,6 +162,12 @@ class App(ttk.Frame):
         self.invert_chk = ttk.Checkbutton(adv, text="黑白反转", variable=self.invert_var,
                                           command=self.on_param_change)
         self.invert_chk.grid(row=0, column=0, sticky="w", padx=4)
+        # Color Fill：全局输出渲染开关（不属于任何 mode preset，默认 OFF）
+        self.color_fill_var = tk.BooleanVar(value=self.state.get_color_fill())
+        self.color_fill_chk = ttk.Checkbutton(
+            adv, text="彩色填充", variable=self.color_fill_var,
+            command=self.on_color_fill_change)
+        self.color_fill_chk.grid(row=1, column=0, sticky="w", padx=4)
 
         # 操作按钮：生成预览为主按钮（加宽），恢复默认值为次级
         btns = ttk.Frame(wrap)
@@ -305,6 +311,8 @@ class App(ttk.Frame):
             self.width_var.set(str(p["output_width"]))
             self.block_var.set(str(p["pixel_block_size"]))
             self.invert_var.set(bool(p.get("invert", False)))
+            # 全局 Color Fill：不属于 mode preset，切模式/恢复默认时保持全局值
+            self.color_fill_var.set(self.state.get_color_fill())
             # 模式专属
             self._build_specific_params(mode)
             if mode == "classic":
@@ -373,6 +381,17 @@ class App(ttk.Frame):
         if mode == "classic":
             self._update_b_hint()
         self._update_geometry_readout()
+        self._refresh_result_status()
+
+    def on_color_fill_change(self):
+        """Color Fill 开关变化：更新全局状态，仅影响 current/stale。
+
+        Color Fill 是全局输出状态（不进 mode params）。切换后不自动生成；
+        旧结果按 GenerationKey（含 color_fill）判定 current/stale。
+        """
+        if self._syncing:
+            return
+        self.state.set_color_fill(self.color_fill_var.get())
         self._refresh_result_status()
 
     def _validate_block_text(self, proposed) -> bool:
@@ -497,8 +516,12 @@ class App(ttk.Frame):
             return
         # 确保控件值已写入 state
         self._read_widgets_into_state()
+        # 全局 Color Fill 状态以 state 为准（on_color_fill_change 已同步），
+        # 作为下游 renderer 开关注入 params 传给 worker。
+        self.state.set_color_fill(self.color_fill_var.get())
         mode = self.state.current_mode
         params = self.state.get_params(mode)
+        params["color_fill"] = self.state.get_color_fill()
         key = self.state.current_key()
 
         self._set_busy(True)

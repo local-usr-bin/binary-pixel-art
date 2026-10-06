@@ -4,8 +4,9 @@
 - 记住每个正式模式在本次会话中的参数（mode -> parameter state）；
 - 提供 Restore Defaults（仅恢复当前模式）；
 - 参数校验（blockSize 奇数 / t、b 范围 / b>=t 允许）；
+- 全局输出渲染状态（color_fill 等，跨模式保持不变）；
 - geometry readout：复用 src.params.compute_geometry，不复制算法逻辑；
-- GenerationKey（source/mode/参数/invert）与 current/stale 判定；
+- GenerationKey（source/mode/参数/invert/color_fill）与 current/stale 判定；
 - result 内存状态与 save_enabled 条件逻辑。
 
 本模块不接触 cv2 图像处理，也不导入 Tkinter。
@@ -71,13 +72,14 @@ class GenerationKey:
     """一次生成结果的唯一标识（轻量、可哈希、可相等比较）。
 
     包含：source identity、mode、target/requested width、pixel block size、
-    模式专属参数、invert。两把 key 完全相等 <=> 结果可判定为 current。
+    模式专属参数、invert、color_fill。两把 key 完全相等 <=> 结果可判定为 current。
     """
     source_id: str          # source 身份（路径 + 尺寸 + 内容指纹）
     mode: str
     output_width: int
     pixel_block_size: int
     invert: bool
+    color_fill: bool
     mode_params: tuple      # 模式专属参数，排序后的 (k, v) 元组，保证可哈希
 
     @staticmethod
@@ -101,6 +103,7 @@ class GenerationKey:
             output_width=int(p["output_width"]),
             pixel_block_size=int(p["pixel_block_size"]),
             invert=bool(p.get("invert", False)),
+            color_fill=bool(state.color_fill),
             mode_params=mp,
         )
 
@@ -188,6 +191,9 @@ class AppState:
         # 每个模式独立记住自己的参数
         self._params = {m: default_params(m) for m in MODE_ORDER}
         self.current_mode = "classic"
+        # 全局输出渲染状态（不属于任何 mode preset；跨模式保持不变）
+        # - color_fill：Color Fill 全局开关，默认 OFF
+        self.color_fill = False
         # source 状态
         self.source_path = None
         self.source_shape = None  # (height, width) 或 None
@@ -205,6 +211,15 @@ class AppState:
 
     def modes(self):
         return list(MODE_ORDER)
+
+    # ------------------------------------------------------- 全局渲染状态
+    def set_color_fill(self, value: bool):
+        """设置全局 Color Fill 开关（不属于任何 mode preset）。"""
+        self.color_fill = bool(value)
+        return self.color_fill
+
+    def get_color_fill(self) -> bool:
+        return bool(self.color_fill)
 
     # ------------------------------------------------------------- 参数读写
     def get_params(self, mode=None) -> dict:
@@ -231,7 +246,11 @@ class AppState:
         return result
 
     def restore_defaults(self, mode=None):
-        """恢复当前（或指定）模式的默认 preset；**不影响**其它模式。"""
+        """恢复当前（或指定）模式的默认 preset；**不影响**其它模式。
+
+        注意：Color Fill 是全局画笔状态，不属于任何 mode preset，
+        因此本方法**不修改** ``color_fill``（也不修改其它全局输出状态）。
+        """
         mode = mode or self.current_mode
         self._params[mode] = default_params(mode)
 

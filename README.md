@@ -1,6 +1,10 @@
 # binary-pixel-art
 
-Strict black-and-white pseudo-pixel image processing project.
+Pseudo-pixel image processing project.
+
+核心算法生成严格二值 pseudo-pixel mask；默认输出为黑白；
+可选 **Color Fill（彩色填充）** 使用该硬边界 mask 显示原图连续色彩纹理，
+即 mask 黑处取原图颜色、白处保持纯白，mask 边界始终严格锐利。
 
 正式产品模式共 **4 种**（详见 `docs/four_modes.md`）：
 
@@ -16,10 +20,10 @@ Strict black-and-white pseudo-pixel image processing project.
 - `docs/four_modes.md` — 当前冻结的四种正式风格方向
 - `docs/modern_round1.md` — Modern 第一轮实验记录（历史参考）
 - `docs/WB_WORKFLOW.md` — WB 沙箱 / CNB 协作约定
-- `src/` — 算法实现（`FORMAL_MODES` 注册正式四模式；其余为实验/基准实现）
-- `gui/` — Tkinter GUI（`gui.state` 会话状态、`gui.app` 主界面；本轮为骨架 GUI-001A）
-- `tools/` — 实验入口与程序化测试图生成
-- `tests/` — 正式模式 / 回归 / legacy 未改 / GUI 状态 测试
+- `src/` — 算法实现（`FORMAL_MODES` 注册正式四模式；`render.py` 为 Color Fill 下游 renderer；其余为实验/基准实现）
+- `gui/` — Tkinter GUI（`gui.state` 会话状态、`gui.app` 主界面、`gui.worker` 后台生成、`gui.save` PNG 保存）
+- `tools/` — 实验入口与程序化测试图生成（含 Color Fill 视觉矩阵脚本）
+- `tests/` — 正式模式 / 回归 / legacy 未改 / GUI 状态 / Color Fill 测试
 - `outputs/` — 实验输出（默认不进 Git）
 
 ## 快速开始
