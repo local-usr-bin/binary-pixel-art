@@ -69,6 +69,12 @@ python -m pytest tests/ -v
 Runtime 第三方依赖（见 `requirements.txt`）：`numpy`、`opencv-python`、`Pillow`；
 测试用 `pytest`（见 `requirements-dev.txt`）。不使用任何 AI / 神经网络依赖。
 
+## 许可证
+
+本项目以 **MIT License** 发布，见 [`LICENSE`](LICENSE)。第三方组件（CPython、Tcl/Tk、
+NumPy、opencv-python、Pillow、PyInstaller）的许可证与来源见
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
 ## Windows 打包（开发者）
 
 Windows Packaging Trial 已在真机验证成功；仓库现提供可复现的 build configuration。
