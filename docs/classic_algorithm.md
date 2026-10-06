@@ -4,6 +4,13 @@
 > 只陈述已从原始代码确认的行为，不包含推测、不包含"改进"、不包含 Modern 算法设计。
 > 本文件与 `legacy/*.py` 相互独立：legacy 原件永不修改，复刻以新代码实现。
 
+> **重要边界声明（fidelity boundary）**：本文档第 2、7 节描述的是
+> `legacy/xiangsudian.py` 的**历史几何行为**。正式产品中的 `classic()` 保留其
+> **二值算法语义**（直方图均衡、两阶段缩放、双阈值稀疏子网格、网点密度），
+> 但采用统一的严格 P×P 几何模型，在**宽高均统一为 P 整数倍**这一点上**有意偏离**
+> 历史脚本的非规则几何（含默认参数下的高度差异）。二者边界详见文末
+> 「## Legacy 与正式 Classic 的几何边界」。
+
 ## 总览
 
 `xiangsudian.py` 是一条**自定义的规则空间密度二值化**管线：先把图缩放到目标网格分辨率，再在网格上用**两轮独立的灰度阈值**决定每个逻辑像素是黑还是白，最后用最近邻放大还原为纯黑/纯白的方块。
@@ -110,3 +117,42 @@
 | 处理中间过程完全没有灰度 / 平滑插值 | ❌ **假**：两阶段缩放默认用 `INTER_LINEAR`，二值化前存在连续灰度中间值和双线性插值 |
 
 不要因为"最终是二值图"就误以为"整个过程都是二值的"——这两件事在 Classic 里是分离的：**灰度与平滑发生在缩放阶段，二值化发生在阈值阶段，二者先后明确。**
+
+## Legacy 与正式 Classic 的几何边界
+
+本节区分两个概念：**历史 Legacy 脚本**（`legacy/xiangsudian.py`）与**正式产品 Classic**
+（`src/algorithms.py::classic`）。二者共享同一套二值算法语义（直方图均衡 → 两阶段
+`INTER_LINEAR` 缩放 → 双阈值稀疏子网格 → `INTER_NEAREST` 放大），但**几何尺寸计算不同**。
+
+### A. 历史 Legacy 行为
+
+- **最终输出宽恒等于 `d`**：`first` 的宽就是 `d`，最终 `INTER_NEAREST` 放大回 `(d, int(d*H/W))`，
+  与 `s` 是否整除无关。
+- **中间尺寸使用 `int()` 截断**：`first` 高 = `int(d*H/W)`，`second` 宽 = `int(first_w/s)`、
+  `second` 高 = `int(first_h/s)`。
+- 当 `d` 不能被 `s` 整除时，`second` 的宽高取 `int()` 截断，随后 `INTER_NEAREST` 放大回 `d`
+  的过程会产生**非完全等宽/等高**的逻辑块（边缘块的尺寸与内部块不同）。
+
+### B. 正式 Classic 产品行为
+
+- **保留祖传二值算法语义**：阈值真值表、稀疏子网格密度、直方图均衡开关、两阶段
+  `INTER_LINEAR` 缩放、最终 `INTER_NEAREST` 放大均不变。
+- **采用统一 P×P 几何模型**（`src/params.py::compute_geometry`）：
+  - `logical_width = round(requested_output_width / P)`；
+  - `logical_height = round(logical_width * H / W)`；
+  - `actual_output_width = logical_width * P`、`actual_output_height = logical_height * P`。
+- **宽高均为 P 的整数倍**，每个逻辑块严格 P×P；这是**有意的产品化改进**，不是 bug。
+
+### 边界结论（intentional divergence）
+
+正式 `classic()` 的宽高均统一为 P 整数倍，而 Legacy 用 `int()` 截断（高 = `int(d*H/W)`，
+不保证 P 整数倍）。因此：
+
+| 场景 | 正式 Classic 与 Legacy 的尺寸关系 |
+|---|---|
+| 源图宽高比恰好使 `round(logical_w*H/W)*P == int(d*H/W)` 时 | 尺寸一致（可能逐像素一致） |
+| 其余绝大多数源图（含默认参数 `output_width=1000, pixel_block_size=2`） | 高度存在约 ±1 px 差异（属**已记录的预期设计**） |
+
+因此，**不要**把正式 `classic()` 描述为「完全逐字节复刻 Legacy」——它复刻的是
+**二值算法语义与网点密度**，几何模型已在产品化阶段统一为严格 P×P。相关边界测试见
+`tests/test_classic_fidelity.py`。

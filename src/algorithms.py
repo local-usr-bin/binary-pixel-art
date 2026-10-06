@@ -73,16 +73,23 @@ def classic(
     equalize=CLASSIC_DEFAULT_EQUALIZE,
     invert=False,
 ):
-    """Classic：精确复现 legacy/xiangsudian.py 语义，已参数化。
+    """Classic：复刻 legacy/xiangsudian.py 的算法语义，已参数化并统一几何。
 
-    - output_width 直接映射为 Classic 的 d（第一阶段/最终 INTER_NEAREST 输出宽度）；
+    - output_width 为目标宽度（requested_output_width），映射为 Classic 的 d；
+      当它不能被 pixel_block_size 整除时，实际输出宽度吸附到最近的 P 整数倍
+      （见 src.params.compute_geometry，intentional divergence，非逐字节复刻 Legacy）；
     - pixel_block_size 映射为 s；
     - t/b 为整数 0..255，b>=t 合法不拒绝；
     - equalize 默认 True（祖传默认直方图均衡）；
     - invert 仅在最终二值结果阶段 0↔255。
 
-    两阶段缩放均用 OpenCV 默认 INTER_LINEAR；第一轮 (偶,偶) 且 a<t 置黑；
-    第二轮全位置 a<b 置黑、无 else；最终 INTER_NEAREST 放大。
+    几何统一：宽高均走 compute_geometry，输出严格 P×P（actual = logical × s），
+    每个逻辑方块严格 s×s。两阶段缩放均用 OpenCV 默认 INTER_LINEAR；
+    第一轮 (偶,偶) 且 a<t 置黑；第二轮全位置 a<b 置黑、无 else；最终 INTER_NEAREST 放大。
+
+    与 Legacy 的几何差异（intentional divergence）：Legacy 用 int() 截断且输出高
+    = int(d*h0/w0)，而本实现宽高均为 P 整数倍，故在多数源图（含默认参数）下与
+    Legacy 存在约 ±1 px 高度差异。算法语义（均衡/两阶段缩放/双阈值/网点密度）不变。
     """
     t, b = validate_classic_thresholds(t, b)
 
@@ -96,16 +103,17 @@ def classic(
 
     h0, w0 = img_input.shape[:2]
 
-    # 几何：输出宽度 == d，像素块 == s
+    # 几何：宽高均统一 P×P（actual = logical × s）
     geo = compute_geometry(w0, h0, output_width, pixel_block_size)
-    d = geo.actual_output_width          # 最终输出宽度（= logical_width * s）
     s = geo.pixel_block_size
+    actual_w = geo.actual_output_width
+    actual_h = geo.actual_output_height
+    logical_w = geo.logical_width
+    logical_h = geo.logical_height
 
-    # 两阶段缩放（默认 INTER_LINEAR）
-    first = cv2.resize(img_input, (d, int(d * h0 / w0)))
-    second = cv2.resize(
-        first, (int(first.shape[1] / s), int(first.shape[0] / s))
-    )
+    # 两阶段缩放（默认 INTER_LINEAR）：先到 actual 尺寸，再到 logical 尺寸（÷s）
+    first = cv2.resize(img_input, (actual_w, actual_h))
+    second = cv2.resize(first, (logical_w, logical_h))
 
     # 二值画布：全白
     canvas = np.full(second.shape[:2] + (3,), 255, np.uint8)
@@ -133,8 +141,8 @@ def classic(
             if a < b:
                 canvas[i, j] = [0, 0, 0]
 
-    # 最近邻放大回最终输出尺寸
-    out = cv2.resize(canvas, (d, int(d * h0 / w0)), interpolation=cv2.INTER_NEAREST)
+    # 最近邻放大回最终输出尺寸（严格 P×P）
+    out = cv2.resize(canvas, (actual_w, actual_h), interpolation=cv2.INTER_NEAREST)
     if invert:
         out = apply_invert(out)
     return out

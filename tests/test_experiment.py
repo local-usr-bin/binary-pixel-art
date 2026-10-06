@@ -61,6 +61,11 @@ def test_img():
 # ---------------------------------------------------------------------------
 
 def _classic_reference(img_bgr, output_width=1000, s=2, t=127, b=60, equalize=True):
+    """独立参考实现：统一 P×P geometry 下的 Classic（用于回归比对）。
+
+    注意：与 legacy/xiangsudian.py 的差异见 tests/test_classic_fidelity.py。
+    这里复刻的是「统一 geometry + 祖传双阈值语义」，宽度/高度均走 compute_geometry。
+    """
     if equalize:
         gray = to_gray(img_bgr)
         eq = cv2.equalizeHist(gray)
@@ -68,8 +73,11 @@ def _classic_reference(img_bgr, output_width=1000, s=2, t=127, b=60, equalize=Tr
     else:
         inp = img_bgr
     h0, w0 = inp.shape[:2]
-    first = cv2.resize(inp, (output_width, int(output_width * h0 / w0)))
-    second = cv2.resize(first, (int(first.shape[1] / s), int(first.shape[0] / s)))
+    geo = compute_geometry(w0, h0, output_width, s)
+    aw, ah = geo.actual_output_width, geo.actual_output_height
+    lw, lh = geo.logical_width, geo.logical_height
+    first = cv2.resize(inp, (aw, ah))
+    second = cv2.resize(first, (lw, lh))
     H, W = second.shape[:2]
     canvas = np.full((H, W, 3), 255, np.uint8)
     a = second.mean(axis=2)
@@ -81,7 +89,7 @@ def _classic_reference(img_bgr, output_width=1000, s=2, t=127, b=60, equalize=Tr
         for j in range(W):
             if a[i, j] < b:
                 canvas[i, j] = [0, 0, 0]
-    return cv2.resize(canvas, (output_width, int(output_width * h0 / w0)), interpolation=cv2.INTER_NEAREST)
+    return cv2.resize(canvas, (aw, ah), interpolation=cv2.INTER_NEAREST)
 
 
 def _bayer4_reference(img_bgr, output_width=1280, p=10, matrix_size=4, tone_bias=0):
@@ -128,7 +136,7 @@ def test_formal_binary_and_deterministic(name, fn, test_img):
 def test_classic_default_regression(test_img):
     got = algorithms.classic(test_img)  # 默认 output_width=1000, s=2, t=127, b=60, equalize=True
     ref = _classic_reference(test_img)
-    assert np.array_equal(got, ref), "Classic 默认输出与历史实现不一致"
+    assert np.array_equal(got, ref), "Classic 默认输出与统一 geometry 参考实现不一致"
 
 
 def test_bayer4_default_regression(test_img):
