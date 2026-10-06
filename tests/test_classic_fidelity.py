@@ -5,12 +5,18 @@
 正式 `classic()` 保留 Legacy 的**二值算法语义**（直方图均衡、两阶段 INTER_LINEAR
 缩放、双阈值稀疏子网格、网点密度），但几何模型统一为严格 P×P（宽高均为 P 整数倍）。
 
-因此本测试验证三类命题：
+因此本测试验证正式产品契约（而非错误的全局尺寸差异上限）：
 
-  1. 统一 geometry：classic 输出宽高 = actual_output_width/height，均为 P 整数倍，
-     每个逻辑块严格 P×P；
-  2. 算法语义保真：当几何尺寸恰好与 Legacy 一致时（如正方形源图），逐像素一致；
-  3. intentional divergence：与 Legacy 的尺寸差异 ≤ ±(P-1) px，属已记录的预期设计。
+  1. classic 输出尺寸严格等于 compute_geometry() 的 actual 尺寸；
+  2. actual width/height 均为 P 整数倍；
+  3. 每个逻辑像素严格 P×P（actual = logical × P）；
+  4. requested width -> actual width 是最近合法 P 网格吸附（宽度差 ≤ P/2，数学严格成立）；
+  5. 长宽比采用整数逻辑网格下的最近近似；
+  6. 当 Product geometry 与 Legacy geometry 恰好一致时，算法结果逐像素一致；
+  7. 对明确选定的 divergence 样本记录具体尺寸差异，不推广为全局上限。
+
+注意：**不存在**「高度差恒 ≤ P」之类的普遍保证——宽度吸附误差会经源图宽高比
+放大到高度，极端长宽比下高度差可能远超 P。
 
 运行：
     python3.11 -m pytest tests/test_classic_fidelity.py -v
@@ -165,18 +171,73 @@ def test_classic_matches_legacy_when_geometry_agrees(h, w):
 
 
 # ---------------------------------------------------------------------------
-# 3. intentional divergence：尺寸差异 ≤ ±(P-1) px，属预期设计
+# 3. 正式产品契约：requested -> actual 吸附 / 长宽比近似
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("out_w,p", PARAM_CASES)
-@pytest.mark.parametrize("h,w", SIZES)
-def test_classic_intentional_divergence_bounded(h, w, out_w, p):
-    """classic 与 Legacy 的尺寸差异是预期的，且宽度差异 ≤ P-1。
+def test_classic_requested_width_adsorbs_to_nearest_p_grid(out_w, p):
+    """requested width -> actual width 是最近合法 P 网格吸附。
 
-    Legacy 宽恒为 d（=out_w），classic 宽为 P 整数倍（吸附到最近合法值），
-    二者差不超过 P-1。高度差异同样由几何取整决定，属 intentional divergence。
+    宽度吸附误差数学上严格 ≤ P/2（round 到最近 P 整数倍），这是唯一可普遍保证的
+    宽度级契约。高度差异不在此设上限（见 test_classic_intentional_divergence_recorded）。
     """
-    img = make_pattern(h, w, seed=hash(("div", out_w, p, h, w)) & 0xFFFFFFFF)
+    h, w = 600, 800
+    img = make_pattern(h, w, seed=hash(("adsorb", out_w, p)) & 0xFFFFFFFF)
+    got = algorithms.classic(img, output_width=out_w, pixel_block_size=p,
+                             t=127, b=60, equalize=True)
+
+    geo = compute_geometry(w, h, out_w, p)
+    # actual_w = round(out_w / P) * P，吸附误差 ≤ P/2
+    assert got.shape[1] == geo.actual_output_width
+    assert abs(geo.actual_output_width - out_w) <= p / 2, "宽度吸附误差超过 P/2"
+    # actual_w 是 P 整数倍
+    assert geo.actual_output_width % p == 0
+
+
+@pytest.mark.parametrize("h,w", SIZES)
+def test_classic_aspect_ratio_nearest_integer_approx(h, w):
+    """长宽比采用整数逻辑网格下的最近近似。
+
+    logical_height = round(logical_width * H/W)，即高度在整数逻辑网格上最接近原比例。
+    """
+    img = make_pattern(h, w, seed=hash(("aspect", h, w)) & 0xFFFFFFFF)
+    got = algorithms.classic(img, output_width=1000, pixel_block_size=2,
+                             t=127, b=60, equalize=True)
+
+    geo = compute_geometry(w, h, 1000, 2)
+    # 逻辑高 = round(逻辑宽 * 源高 / 源宽)
+    expected_lh = max(1, round(geo.logical_width * h / w))
+    assert geo.logical_height == expected_lh, "逻辑高不符合整数网格最近近似"
+    # 输出高 = logical_height * P，严格 P 整数倍
+    assert got.shape[0] == geo.actual_output_height == geo.logical_height * 2
+
+
+# ---------------------------------------------------------------------------
+# 4. intentional divergence：对明确选定的样本记录具体尺寸差异（不设全局上限）
+# ---------------------------------------------------------------------------
+
+# 明确选定的 divergence 样本：(源高, 源宽, requested_width, pixel_block_size, 期望 dw, 期望 dh)
+# 其中 dw = legacy_w - product_w，dh = legacy_h - product_h。
+# 记录具体差异作为回归锚点，而非普遍数学保证。
+DIVERGENCE_SAMPLES = [
+    # (h, w, out_w, p, dw, dh)
+    (600, 800, 1000, 3, 1, 0),   # actual_w=999 (legacy 1000)，高同为 750
+    (800, 600, 1001, 4, 1, 2),   # actual_w=1000 (legacy 1001)，actual_h=1332 (legacy 1334)
+]
+
+
+@pytest.mark.parametrize("h,w,out_w,p,exp_dw,exp_dh", DIVERGENCE_SAMPLES)
+def test_classic_intentional_divergence_recorded(h, w, out_w, p, exp_dw, exp_dh):
+    """对明确选定的 divergence 样本，记录 Legacy 与 Product 的具体尺寸差异。
+
+    本测试只验证：
+      - Legacy 宽度恒等于 d（历史语义）；
+      - Product 严格等于统一 geometry；
+      - 记录二者具体差异值（作为锚点，防止无意回归）。
+
+    **不**断言任何「高度差 ≤ P」之类的全局上限——那在极端长宽比下不成立。
+    """
+    img = make_pattern(h, w, seed=hash(("rec", h, w, out_w, p)) & 0xFFFFFFFF)
     got = algorithms.classic(img, output_width=out_w, pixel_block_size=p,
                              t=127, b=60, equalize=True)
     ref = legacy_oracle(img, d=out_w, s=p, t=127, b=60, equalize=True)
@@ -184,18 +245,23 @@ def test_classic_intentional_divergence_bounded(h, w, out_w, p):
     # Legacy 宽度恒等于 d
     assert ref.shape[1] == out_w, "oracle 宽应恒等于 d（Legacy 语义）"
 
+    # Product 严格等于统一 geometry
     geo = compute_geometry(w, h, out_w, p)
-    # 宽度差异 = |out_w - actual_w|，吸附到最近 P 整数倍，故 ≤ P-1
-    assert abs(ref.shape[1] - got.shape[1]) <= p - 1, "宽度偏差超出预期 ±(P-1) px"
-    # 高度差异由几何取整决定，同样有界（不要求逐像素一致）
-    assert abs(ref.shape[0] - got.shape[0]) <= p, "高度偏差异常"
-    # classic 宽高仍严格 P 整数倍
     assert got.shape[1] == geo.actual_output_width
     assert got.shape[0] == geo.actual_output_height
 
+    # 记录具体尺寸差异（锚点；不同样本差异不同，无全局上限）
+    dw = ref.shape[1] - got.shape[1]
+    dh = ref.shape[0] - got.shape[0]
+    assert dw == exp_dw, f"宽度差异漂移: dw={dw}, 期望 {exp_dw}"
+    assert dh == exp_dh, f"高度差异漂移: dh={dh}, 期望 {exp_dh}"
+
+    # 宽度差异有界（吸附 ≤ P/2）；高度差异**不**设上限（仅记录，不推广）
+    assert abs(dw) <= p / 2
+
 
 # ---------------------------------------------------------------------------
-# 4. equalize=False 且几何一致：算法语义一致
+# 5. equalize=False 且几何一致：算法语义一致
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("h,w", GEOMETRY_AGREE_SIZES)
@@ -210,7 +276,7 @@ def test_classic_equalize_off_geometry_agrees(h, w):
 
 
 # ---------------------------------------------------------------------------
-# 5. 默认参数二值 & deterministic
+# 6. 默认参数二值 & deterministic
 # ---------------------------------------------------------------------------
 
 def test_classic_default_binary_and_deterministic():

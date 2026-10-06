@@ -36,9 +36,10 @@ nearest-neighbor 放大。输出严格只含 0/255，deterministic。
 Classic 的精确行为以 `docs/classic_algorithm.md` 为准，不允许修改语义。
 
 > **Classic 几何边界**：正式 `classic()` 复刻的是 Legacy 的**二值算法语义与网点密度**，
-> 采用统一 P×P 几何模型（宽高均为 P 整数倍）。因此在多数源图（含默认参数）下，其高度与
-> Legacy 原脚本存在约 ±1 px 的有意尺寸差异（intentional divergence），详见
-> `docs/classic_algorithm.md` 末节。
+> 采用统一 P×P 几何模型（宽高均为 P 整数倍）。常见/default 几何下与 Legacy 原脚本的
+> 尺寸差异通常很小；但正式 Classic 以统一 P×P geometry 为准，不同长宽比与非整除目标下
+> 与 Legacy 的尺寸及最终二值图可能产生更广泛的有意差异（intentional divergence），
+> 详见 `docs/classic_algorithm.md` 末节。
 
 ## 非正式（实验阶段 / 开发基准）
 
