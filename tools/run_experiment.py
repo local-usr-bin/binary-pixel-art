@@ -23,16 +23,25 @@ ALGOS = list(algorithms.FORMAL_MODES)
 
 
 def make_contact_sheet(images, labels):
-    """2 行 2 列拼图，左上角放标签。"""
+    """2 行 2 列拼图，左上角放标签。
+
+    四模式默认 geometry 可能不同（classic=1000/2，其余=1280/10），
+    拼图前用 nearest-neighbor 统一缩放到第一张图的尺寸，仅用于并排预览，
+    不影响各算法独立输出。
+    """
     assert len(images) == 4
+    ref_h, ref_w = images[0].shape[:2]
     label_h = 28
     grid_rows = []
     for r in range(2):
         row_imgs = []
         for c in range(2):
             idx = r * 2 + c
+            img = images[idx]
+            if img.shape[:2] != (ref_h, ref_w):
+                img = cv2.resize(img, (ref_w, ref_h), interpolation=cv2.INTER_NEAREST)
             canvas = cv2.copyMakeBorder(
-                images[idx], label_h, 0, 0, 0,
+                img, label_h, 0, 0, 0,
                 cv2.BORDER_CONSTANT, value=(255, 255, 255),
             )
             cv2.putText(

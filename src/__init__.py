@@ -1,10 +1,9 @@
-"""binary-pixel-art 实验源码包。
+"""binary-pixel-art 源码包。
 
-本包提供 Classic（精确复现）与第一轮 Modern 五个候选的最小实现。
-所有算法共享同一套脚手架：灰度 -> 缩小 -> 二值化 -> nearest-neighbor 放大。
+提供四种正式二值艺术模式（classic / bayer4 / adaptive_fine / adaptive_bold）
+与尺寸模型、参数校验、共享脚手架。
 """
 
-from .config import LOGICAL_WIDTH, DEFAULT_RESIZE
-from . import algorithms
+from . import algorithms, params, pipeline
 
-__all__ = ["LOGICAL_WIDTH", "DEFAULT_RESIZE", "algorithms"]
+__all__ = ["algorithms", "params", "pipeline"]
