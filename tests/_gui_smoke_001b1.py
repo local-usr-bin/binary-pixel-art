@@ -124,8 +124,9 @@ def main():
     check("生成后 current", app.state.is_current() and not app.state.is_stale())
     check("生成后 busy=False", app.state.busy is False)
     check("生成后控件恢复", str(app.gen_btn.cget("state")) == "normal")
-    check("Save 仍禁用（本轮未接线）", str(app.save_btn.cget("state")) == "disabled")
-    check("save_enabled 逻辑为 True（预留）", app.state.save_enabled() is True)
+    # 注：Save 已在 GUI-001B2 接线，current 结果下应为 enabled
+    check("生成后 Save enabled（current）", str(app.save_btn.cget("state")) == "normal")
+    check("save_enabled 逻辑为 True", app.state.save_enabled() is True)
 
     # ---- 参数变化 -> stale；改回 -> current ----
     n_before = call_count["n"]

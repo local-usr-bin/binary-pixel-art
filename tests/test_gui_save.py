@@ -24,12 +24,13 @@ App 级行为（on_save / cancel / failure）用最小 Tk 在 xvfb 下验证的�
 运行：python3.11 -m pytest tests/test_gui_save.py -v
 """
 
-import os
-import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
 from PIL import Image
+
+from tests.helpers import LEGACY_SHA, legacy_path, sha256_of
 
 from gui.save import (
     default_filename, save_png, read_png_pixels, normalize_png_path,
@@ -38,13 +39,6 @@ from gui.save import (
 from gui.state import AppState
 from gui.worker import run_mode
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-LEGACY_SHA = {
-    "legacy/xiangsudian.py": "d2dd4d6879e0e4b4392e3f54c1ca03b5037c8dc73405ff9e444685c94794ae16",
-    "legacy/xiangsudian2.py": "ba1053a6fd9040061735806d7d4288c1008aa527f56e0a3645bd02532be08ca2",
-    "legacy/xiangsudian3.py": "f103e325f03a0e1f26b1c6658d9c26a748cf1526aa3d5b29cc19625036f987a9",
-}
 
 ALL_MODES = ["classic", "bayer4", "adaptive_fine", "adaptive_bold"]
 
@@ -307,31 +301,70 @@ def test_read_png_helper(tmp_path):
 
 # ---------------------------------------------------------------------------
 # 17. PNG 扩展名归一化（fix: enforce PNG save extension）
+#
+# 注意：normalize_png_path 走 pathlib，Windows 上 `str(Path("/a/b/bar"))`
+# 会变成 `\a\b\bar`（本机分隔符），这是正常平台行为、不是产品 bug。
+# 因此这里只断言「路径语义」（name / suffix / parent / stem），不逐字比较
+# 原始 POSIX 字符串，保证 Windows 与 POSIX 均可通过。
 # ---------------------------------------------------------------------------
 
+def _assert_png_path(inp, *, name, stem, suffix=".png", parent=None):
+    """断言 normalize_png_path 结果在语义上是合法的 .png 路径。
+
+    - name / stem / suffix 精确比较；
+    - parent 若非 None，按 Path 语义比较（分隔符差异不影响）。
+    """
+    out = normalize_png_path(inp)
+    p = Path(out)
+    assert p.name == name
+    assert p.stem == stem
+    assert p.suffix == suffix
+    assert p.suffix.lower() == ".png"
+    if parent is not None:
+        assert p.parent == Path(parent)
+    return out
+
+
 def test_17_normalize_no_extension():
-    assert normalize_png_path("foo") == "foo.png"
-    assert normalize_png_path("/a/b/bar") == "/a/b/bar.png"
+    _assert_png_path("foo", name="foo.png", stem="foo")
+    out = normalize_png_path(str(Path("a") / "b" / "bar"))
+    p = Path(out)
+    assert p.name == "bar.png"
+    assert p.parent == Path("a") / "b"
+    assert p.suffix == ".png"
 
 
 def test_17_normalize_png_accepted():
-    assert normalize_png_path("foo.png") == "foo.png"
-    assert normalize_png_path("foo.PNG") == "foo.PNG"     # 大小写接受，保留原写法
-    assert normalize_png_path("foo.Png") == "foo.Png"
+    assert Path(normalize_png_path("foo.png")).name == "foo.png"
+    assert Path(normalize_png_path("foo.PNG")).name == "foo.PNG"   # 保留原写法
+    assert Path(normalize_png_path("foo.Png")).name == "foo.Png"
+    for s in ("foo.png", "foo.PNG", "foo.Png"):
+        assert Path(normalize_png_path(s)).suffix.lower() == ".png"
 
 
 def test_17_normalize_other_ext_replaced():
-    assert normalize_png_path("foo.jpg") == "foo.png"
-    assert normalize_png_path("foo.jpeg") == "foo.png"
-    assert normalize_png_path("foo.bmp") == "foo.png"
-    assert normalize_png_path("foo.webp") == "foo.png"
-    assert normalize_png_path("/a/b/c.gif") == "/a/b/c.png"
+    for bad in ("foo.jpg", "foo.jpeg", "foo.bmp", "foo.webp", "foo.gif"):
+        out = normalize_png_path(bad)
+        assert Path(out).name == "foo.png"
+        assert Path(out).suffix == ".png"
+    # 带目录：目录保留、扩展名替换
+    out = normalize_png_path(str(Path("a") / "b" / "c.gif"))
+    p = Path(out)
+    assert p.name == "c.png"
+    assert p.parent == Path("a") / "b"
+    assert p.suffix == ".png"
 
 
 def test_17_normalize_unicode_and_wrong_ext():
-    assert normalize_png_path("照片.jpg") == "照片.png"
-    assert normalize_png_path("目录/结果.jpeg") == "目录/结果.png"
-    assert normalize_png_path("照片") == "照片.png"
+    assert Path(normalize_png_path("照片.jpg")).name == "照片.png"
+    assert Path(normalize_png_path("照片")).name == "照片.png"
+    # 中文目录 + 错误扩展名：目录与 stem 保留，仅扩展名归一化
+    out = normalize_png_path(str(Path("目录") / "结果.jpeg"))
+    p = Path(out)
+    assert p.name == "结果.png"
+    assert p.stem == "结果"
+    assert p.parent == Path("目录")
+    assert p.suffix == ".png"
 
 
 def test_17_normalize_keeps_only_png_then_saves(tmp_path):
@@ -368,6 +401,5 @@ def test_17_no_extension_saves_png(tmp_path):
 
 @pytest.mark.parametrize("relpath,sha", sorted(LEGACY_SHA.items()))
 def test_16_legacy_unchanged(relpath, sha):
-    path = os.path.join(REPO_ROOT, relpath)
-    out = subprocess.check_output(["sha256sum", path]).decode().split()[0]
+    out = sha256_of(legacy_path(relpath))
     assert out == sha, f"{relpath} SHA-256 变化"

@@ -15,10 +15,9 @@ GUI 视觉布局需人工 smoke，本文件只测非视觉逻辑。
 运行：python3.11 -m pytest tests/test_gui_state.py -v
 """
 
-import os
-import subprocess
-
 import pytest
+
+from tests.helpers import LEGACY_SHA, legacy_path, sha256_of
 
 from gui.state import (
     AppState,
@@ -40,14 +39,6 @@ from src.params import (
     ADAPTIVE_BOLD_DEFAULT_BLOCK,
     ADAPTIVE_DEFAULT_C,
 )
-
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-LEGACY_SHA = {
-    "legacy/xiangsudian.py": "d2dd4d6879e0e4b4392e3f54c1ca03b5037c8dc73405ff9e444685c94794ae16",
-    "legacy/xiangsudian2.py": "ba1053a6fd9040061735806d7d4288c1008aa527f56e0a3645bd02532be08ca2",
-    "legacy/xiangsudian3.py": "f103e325f03a0e1f26b1c6658d9c26a748cf1526aa3d5b29cc19625036f987a9",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +268,7 @@ def test_set_source():
 
 @pytest.mark.parametrize("relpath,sha", sorted(LEGACY_SHA.items()))
 def test_legacy_unchanged(relpath, sha):
-    path = os.path.join(REPO_ROOT, relpath)
-    out = subprocess.check_output(["sha256sum", path]).decode().split()[0]
+    out = sha256_of(legacy_path(relpath))
     assert out == sha, f"{relpath} SHA-256 变化"
 
 
