@@ -26,11 +26,13 @@ CLASSIC_S = 2      # 降采样系数
 CLASSIC_T = 127    # 第一轮灰度阈值
 CLASSIC_B = 60     # 第二轮黑色阈值（CLI bug 导致不可改，实际固定为 60）
 
-# --- M3 adaptive 固定参数 ---
-# 选用 adaptive mean（高斯权重在高对比边缘处更容易把细线拉成断点，
-# mean 更能保持动漫图的大色块完整性）。
-ADAPTIVE_BLOCK = 11   # 局部窗口
-ADAPTIVE_C = 2        # 常数偏移
+# --- Adaptive 系列固定参数（正式产品 + 开发基准共用 C） ---
+# Adaptive Fine（正式）：Gaussian 局部阈值，细密云纹/墨线/蚀刻感
+ADAPTIVE_FINE_BLOCK = 11
+# Adaptive Bold（正式）：Mean 局部阈值，粗块/木刻/海报感
+ADAPTIVE_BOLD_BLOCK = 25
+# 两者共用的常数偏移
+ADAPTIVE_C = 2
 
 # --- M4 gradient 固定参数 ---
 GRAD_KERNEL = 3       # Sobel ksize

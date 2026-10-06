@@ -1,26 +1,46 @@
-"""确定性 / 二值性 / 尺寸 / Classic 文档一致性 / legacy 未改 的自动化测试。
+"""正式四模式 + 回归 + 实验模式的自动化测试。
+
+覆盖：
+  1. 四个正式模式输出严格 0/255；
+  2. deterministic；
+  3. 尺寸与长宽比规则正确、四模式同尺寸；
+  4. Classic 无行为回归（真值表 + 第二轮不回白）；
+  5. Bayer4 无行为回归（独立参考实现逐像素比对）；
+  6. Adaptive Fine 参数核验（Gaussian / 11 / C=2，独立参考比对）；
+  7. Adaptive Bold 参数核验（Mean / 25 / C=2，独立参考比对）；
+  8. legacy 三份 .py 字节完全不变（SHA-256）；
+  附：实验/基准模式（m1/m3_adaptive/m4/m5）仅做二值 + 确定性轻量覆盖。
 
 运行：
     python3.11 -m pytest tests/ -v
-（在仓库根目录执行；tests/ 通过 conftest.py 把根目录加入 sys.path）
 """
 
 import os
 import subprocess
 
+import cv2
 import numpy as np
 import pytest
 
 from src import algorithms
-from src.config import LOGICAL_WIDTH, SCALE_UP
+from src.config import (
+    LOGICAL_WIDTH,
+    SCALE_UP,
+    ADAPTIVE_FINE_BLOCK,
+    ADAPTIVE_BOLD_BLOCK,
+    ADAPTIVE_C,
+)
+from src.pipeline import to_gray, shrink_modern, upscale_nn
 from tools.make_test_image import make_test_image
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-ALGOS = [
-    ("classic", algorithms.classic),
+FORMAL = list(algorithms.FORMAL_MODES)
+FORMAL_NAMES = [n for n, _ in FORMAL]
+
+# 实验/开发基准模式：不进入正式列表，仅轻量回归覆盖
+EXPERIMENTAL = [
     ("m1_otsu", algorithms.m1_otsu),
-    ("m2_bayer4", algorithms.m2_bayer4),
     ("m3_adaptive", algorithms.m3_adaptive),
     ("m4_gradient", algorithms.m4_gradient),
     ("m5_pattern", algorithms.m5_pattern),
@@ -40,26 +60,34 @@ def test_img():
 
 
 # ---------------------------------------------------------------------------
-# 1. 输出严格二值（只有 0/255）
+# 0. 正式模式列表核验
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name,fn", ALGOS)
-def test_output_is_binary(name, fn, test_img):
-    out = fn(test_img)
-    uniq = set(np.unique(out).tolist())
+def test_formal_modes_exactly_four():
+    assert FORMAL_NAMES == [
+        "classic", "bayer4", "adaptive_fine", "adaptive_bold",
+    ], f"正式模式列表不符: {FORMAL_NAMES}"
+
+
+# ---------------------------------------------------------------------------
+# 1/2/3. 正式模式：二值 / deterministic / 尺寸与长宽比
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name,fn", FORMAL)
+def test_formal_output_is_binary(name, fn, test_img):
+    uniq = set(np.unique(fn(test_img)).tolist())
     assert uniq <= {0, 255}, f"{name} 输出含非二值像素: {sorted(uniq)}"
 
 
-# ---------------------------------------------------------------------------
-# 2/3. 输出尺寸正确且保持长宽比，六算法一致
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name,fn", FORMAL)
+def test_formal_deterministic(name, fn, test_img):
+    assert np.array_equal(fn(test_img), fn(test_img)), f"{name} 两次结果不一致"
 
-@pytest.mark.parametrize("name,fn", ALGOS)
-def test_output_size_and_aspect(name, fn, test_img):
+
+@pytest.mark.parametrize("name,fn", FORMAL)
+def test_formal_output_size_and_aspect(name, fn, test_img):
     h0, w0 = test_img.shape[:2]
-    out = fn(test_img)
-    oh, ow = out.shape[:2]
-    # 逻辑宽 = LOGICAL_WIDTH，逻辑高 = int(LOGICAL_WIDTH*h0/w0)
+    oh, ow = fn(test_img).shape[:2]
     exp_h = int(LOGICAL_WIDTH * h0 / w0) * SCALE_UP
     exp_w = LOGICAL_WIDTH * SCALE_UP
     assert (ow, oh) == (exp_w, exp_h), (
@@ -67,30 +95,17 @@ def test_output_size_and_aspect(name, fn, test_img):
     )
 
 
-def test_all_algos_same_output_size(test_img):
-    shapes = {fn(test_img).shape for _, fn in ALGOS}
-    assert len(shapes) == 1, f"六算法输出尺寸不一致: {shapes}"
+def test_formal_all_same_output_size(test_img):
+    shapes = {fn(test_img).shape for _, fn in FORMAL}
+    assert len(shapes) == 1, f"四模式输出尺寸不一致: {shapes}"
 
 
 # ---------------------------------------------------------------------------
-# 4. 同输入同参数结果 deterministic
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("name,fn", ALGOS)
-def test_deterministic(name, fn, test_img):
-    a = fn(test_img)
-    b = fn(test_img)
-    assert np.array_equal(a, b), f"{name} 同输入两次结果不一致"
-
-
-# ---------------------------------------------------------------------------
-# 5. Classic 行为与文档一致（真值表核验，不依赖视觉）
+# 4. Classic 无行为回归（真值表 + 第二轮不回白）
 # ---------------------------------------------------------------------------
 
 def _classic_logic_grid(img_bgr):
     """复刻 Classic 到逻辑二值网格（不放大），用于核验真值表。"""
-    import cv2
-    from src.pipeline import to_gray
     from src.config import CLASSIC_S, CLASSIC_T, CLASSIC_B
 
     d = LOGICAL_WIDTH * CLASSIC_S
@@ -105,12 +120,10 @@ def _classic_logic_grid(img_bgr):
     H, W = second.shape[:2]
     canvas = np.full((H, W), 255, np.uint8)
     a = second.mean(axis=2)
-    # 第一轮：偶数行、偶数列
     for i in range(0, H, 2):
         for j in range(0, W, 2):
             if a[i, j] < CLASSIC_T:
                 canvas[i, j] = 0
-    # 第二轮：全位置，无 else
     for i in range(H):
         for j in range(W):
             if a[i, j] < CLASSIC_B:
@@ -119,7 +132,7 @@ def _classic_logic_grid(img_bgr):
 
 
 def test_classic_truth_table(test_img):
-    """核验 Classic 精确真值：黑 = {a<b} ∪ {y偶∧x偶∧ b≤a<t}。"""
+    """黑 = {a<b} ∪ {y偶∧x偶∧ b≤a<t}。"""
     from src.config import CLASSIC_T, CLASSIC_B
 
     second, canvas = _classic_logic_grid(test_img)
@@ -138,7 +151,6 @@ def test_classic_truth_table(test_img):
 
 
 def test_classic_second_pass_never_whitens(test_img):
-    """第二轮不得把第一轮已变黑的像素设回白。"""
     from src.config import CLASSIC_T, CLASSIC_B
 
     second, _ = _classic_logic_grid(test_img)
@@ -149,19 +161,70 @@ def test_classic_second_pass_never_whitens(test_img):
         for j in range(0, W, 2):
             if a[i, j] < CLASSIC_T:
                 first_pass[i, j] = 0
-    # 模拟第二轮
     second_pass = first_pass.copy()
     for i in range(H):
         for j in range(W):
             if a[i, j] < CLASSIC_B:
                 second_pass[i, j] = 0
-    # 第一轮的黑点在第二轮后必须仍为黑
     first_black = first_pass == 0
     assert (second_pass[first_black] == 0).all(), "第二轮把黑点设回白了"
 
 
 # ---------------------------------------------------------------------------
-# 6. legacy 原件未被修改
+# 5. Bayer4 无行为回归（独立参考实现逐像素比对）
+# ---------------------------------------------------------------------------
+
+def _bayer4_reference(img_bgr):
+    """测试内独立书写的 Bayer 4x4 参考实现，用于捕获实现漂移。"""
+    B = np.array(
+        [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]],
+        dtype=np.float32,
+    ) * (255.0 / 15.0)
+    small = shrink_modern(to_gray(img_bgr))
+    h, w = small.shape
+    tiled = np.tile(B, ((h + 3) // 4, (w + 3) // 4))[:h, :w]
+    bw = np.where(small.astype(np.float32) > tiled, 255, 0).astype(np.uint8)
+    return upscale_nn(bw)
+
+
+def test_bayer4_no_regression(test_img):
+    got = algorithms.m2_bayer4(test_img)
+    ref = _bayer4_reference(test_img)
+    assert np.array_equal(got, ref), "bayer4 与独立参考实现不一致（行为漂移）"
+
+
+# ---------------------------------------------------------------------------
+# 6/7. Adaptive Fine / Bold 参数核验（独立参考比对）
+# ---------------------------------------------------------------------------
+
+def _adaptive_reference(img_bgr, method, block, c):
+    small = shrink_modern(to_gray(img_bgr))
+    bw = cv2.adaptiveThreshold(small, 255, method, cv2.THRESH_BINARY, block, c)
+    return upscale_nn(bw)
+
+
+def test_adaptive_fine_params(test_img):
+    """Fine 必须恰为 Gaussian / block=11 / C=2。"""
+    ref = _adaptive_reference(
+        test_img, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2
+    )
+    got = algorithms.adaptive_fine(test_img)
+    assert np.array_equal(got, ref), "adaptive_fine 与 Gaussian/11/C=2 参考不一致"
+    assert ADAPTIVE_FINE_BLOCK == 11 and ADAPTIVE_C == 2
+
+
+def test_adaptive_bold_params(test_img):
+    """Bold 必须恰为 Mean / block=25 / C=2。"""
+    ref = _adaptive_reference(
+        test_img, cv2.ADAPTIVE_THRESH_MEAN_C, 25, 2
+    )
+    got = algorithms.adaptive_bold(test_img)
+    assert np.array_equal(got, ref), "adaptive_bold 与 Mean/25/C=2 参考不一致"
+    assert ADAPTIVE_BOLD_BLOCK == 25 and ADAPTIVE_C == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. legacy 原件未被修改
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("relpath,sha", sorted(LEGACY_SHA.items()))
@@ -170,3 +233,16 @@ def test_legacy_unchanged(relpath, sha):
     assert os.path.exists(path), f"缺少 {relpath}"
     out = subprocess.check_output(["sha256sum", path]).decode().split()[0]
     assert out == sha, f"{relpath} SHA-256 变化: {out} != {sha}"
+
+
+# ---------------------------------------------------------------------------
+# 附：实验/基准模式轻量覆盖（二值 + deterministic + 与正式模式同尺寸）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name,fn", EXPERIMENTAL)
+def test_experimental_binary_and_deterministic(name, fn, test_img):
+    a, b = fn(test_img), fn(test_img)
+    assert set(np.unique(a).tolist()) <= {0, 255}, f"{name} 输出含非二值像素"
+    assert np.array_equal(a, b), f"{name} 两次结果不一致"
+    ref_shape = algorithms.m2_bayer4(test_img).shape
+    assert a.shape == ref_shape, f"{name} 尺寸 {a.shape} 与正式模式 {ref_shape} 不一致"

@@ -1,7 +1,11 @@
-"""第一轮 Modern 五个候选算法实现。
+"""二值艺术算法实现。
 
-统一入口：传入 BGR 原图，返回 3 通道 BGR 严格黑白图（0/255）。
-除 Classic 外，所有候选共用：
+正式产品模式见文件末尾 FORMAL_MODES（classic / bayer4 / adaptive_fine /
+adaptive_bold）。其余函数为实验阶段或开发基准实现，保留供回归对照，
+不进入正式算法列表。
+
+统一入口约定：传入 BGR 原图，返回 3 通道 BGR 严格黑白图（0/255）。
+除 Classic 外，所有 Modern 实现共用：
   - 同一灰度转换（to_gray）
   - 同一逻辑宽度 LOGICAL_WIDTH
   - 同一 AREA 缩小（shrink_modern）
@@ -12,7 +16,8 @@ import cv2
 import numpy as np
 
 from .config import (
-    ADAPTIVE_BLOCK,
+    ADAPTIVE_FINE_BLOCK,
+    ADAPTIVE_BOLD_BLOCK,
     ADAPTIVE_C,
     GRAD_KERNEL,
     GRAD_THRESH,
@@ -85,14 +90,35 @@ def m2_bayer4(img_bgr):
 
 
 # ---------------------------------------------------------------------------
-# M3: AREA + Adaptive Threshold（选 adaptive mean）
+# Adaptive Fine / Adaptive Bold（正式产品模式）
 # ---------------------------------------------------------------------------
 
-def m3_adaptive(img_bgr):
-    """选 adaptive mean 而非 Gaussian 的理由：
-    Gaussian 权重中心高、边缘低，在高对比细线处容易把线拉成断点；
-    mean 对窗口内所有像素一视同仁，更能保住动漫图大色块内部一致性。
-    第一轮固定 block=11, C=2，不扫描。
+def adaptive_fine(img_bgr):
+    """Adaptive Fine（正式）：Gaussian 局部阈值。
+
+    参数固定：ADAPTIVE_THRESH_GAUSSIAN_C, blockSize=ADAPTIVE_FINE_BLOCK(11),
+    C=ADAPTIVE_C(2)。艺术特征：细密、漫画墨线、雕版/蚀刻/刻线感。
+    源自第二轮实验的 m3_alt_method。
+    """
+    gray = to_gray(img_bgr)
+    small = shrink_modern(gray)
+    bw = cv2.adaptiveThreshold(
+        small,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        ADAPTIVE_FINE_BLOCK,
+        ADAPTIVE_C,
+    )
+    return upscale_nn(bw)
+
+
+def adaptive_bold(img_bgr):
+    """Adaptive Bold（正式）：Mean 局部阈值。
+
+    参数固定：ADAPTIVE_THRESH_MEAN_C, blockSize=ADAPTIVE_BOLD_BLOCK(25),
+    C=ADAPTIVE_C(2)。艺术特征：粗块、主体感强、木刻/海报感。
+    源自第二轮实验的 m3_large_window。
     """
     gray = to_gray(img_bgr)
     small = shrink_modern(gray)
@@ -101,7 +127,31 @@ def m3_adaptive(img_bgr):
         255,
         cv2.ADAPTIVE_THRESH_MEAN_C,
         cv2.THRESH_BINARY,
-        ADAPTIVE_BLOCK,
+        ADAPTIVE_BOLD_BLOCK,
+        ADAPTIVE_C,
+    )
+    return upscale_nn(bw)
+
+
+# ---------------------------------------------------------------------------
+# m3_adaptive：第一轮实验的原始 adaptive 实现（开发/历史基准）
+# 不进入正式产品模式，仅保留作内部开发对照与回归参考。
+# ---------------------------------------------------------------------------
+
+def m3_adaptive(img_bgr):
+    """[开发基准，非正式模式] Mean 局部阈值，block=11, C=2。
+
+    第一轮实验选 mean 的理由：高斯权重在高对比细线处容易把线拉成断点，
+    mean 对窗口内像素一视同仁，更能保住大色块内部一致性。
+    """
+    gray = to_gray(img_bgr)
+    small = shrink_modern(gray)
+    bw = cv2.adaptiveThreshold(
+        small,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY,
+        ADAPTIVE_FINE_BLOCK,
         ADAPTIVE_C,
     )
     return upscale_nn(bw)
@@ -190,3 +240,17 @@ def m5_pattern(img_bgr):
     out_w, out_h = output_size(small.shape, SCALE_UP)
     up = cv2.resize(pat, (out_w, out_h), interpolation=FINAL_RESIZE)
     return cv2.cvtColor(up, cv2.COLOR_GRAY2BGR)
+
+
+# ---------------------------------------------------------------------------
+# 正式产品算法注册表
+# 当前正式模式只有这 4 种；其余函数（m1_otsu / m3_adaptive / m4_gradient /
+# m5_pattern）为实验阶段或开发基准实现，不在此列。
+# ---------------------------------------------------------------------------
+
+FORMAL_MODES = (
+    ("classic", classic),
+    ("bayer4", m2_bayer4),
+    ("adaptive_fine", adaptive_fine),
+    ("adaptive_bold", adaptive_bold),
+)
