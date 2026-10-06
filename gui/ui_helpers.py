@@ -46,12 +46,13 @@ def bgr_to_tk_photo(img_bgr):
     return tk.PhotoImage(data=ppm, format="PPM")
 
 
-def render_fitted(canvas, img_bgr, center=True):
+def render_fitted(canvas, img_bgr, center=True, nearest=False):
     """把 img_bgr 等比 fit 并居中渲染到 tk.Canvas。
 
     只影响显示层：计算 pane 尺寸 -> fit_dims -> cv2.resize(display) ->
     转 PhotoImage -> 在 canvas 居中放置。返回 (photo, disp_w, disp_h) 或 None。
 
+    nearest=True 时缩放用 INTER_NEAREST（用于二值结果，保持方块锐利）。
     调用方需持有返回的 photo 引用（Tk 不持引用会被 GC）。
     """
     if img_bgr is None:
@@ -66,7 +67,10 @@ def render_fitted(canvas, img_bgr, center=True):
     disp_w, disp_h = fit_dimensions(src_w, src_h, pane_w, pane_h)
 
     if (disp_w, disp_h) != (src_w, src_h):
-        interp = cv2.INTER_AREA if disp_w < src_w else cv2.INTER_NEAREST
+        if nearest:
+            interp = cv2.INTER_AREA if disp_w < src_w else cv2.INTER_NEAREST
+        else:
+            interp = cv2.INTER_AREA
         shown = cv2.resize(img_bgr, (disp_w, disp_h), interpolation=interp)
     else:
         shown = img_bgr

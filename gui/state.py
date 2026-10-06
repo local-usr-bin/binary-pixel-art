@@ -4,12 +4,15 @@
 - 记住每个正式模式在本次会话中的参数（mode -> parameter state）；
 - 提供 Restore Defaults（仅恢复当前模式）；
 - 参数校验（blockSize 奇数 / t、b 范围 / b>=t 允许）；
-- geometry readout：复用 src.params.compute_geometry，不复制算法逻辑。
+- geometry readout：复用 src.params.compute_geometry，不复制算法逻辑；
+- GenerationKey（source/mode/参数/invert）与 current/stale 判定；
+- result 内存状态与 save_enabled 条件逻辑。
 
 本模块不接触 cv2 图像处理，也不导入 Tkinter。
 """
 
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass
 
 from src.params import (
     compute_geometry,
@@ -50,6 +53,55 @@ class GeometryReadout:
         return (
             f"实际输出：{self.actual_output_width} × {self.actual_output_height}\n"
             f"逻辑网格：{self.logical_width} × {self.logical_height}"
+        )
+
+
+# 每个模式「影响结果」的参数键（用于构造 GenerationKey）。
+# 不含 invert（invert 是共同输出选项，单独纳入 key）。
+_MODE_RESULT_KEYS = {
+    "classic": ("t", "b", "equalize"),
+    "bayer4": ("matrix_size", "tone_bias"),
+    "adaptive_fine": ("block_size", "c"),
+    "adaptive_bold": ("block_size", "c"),
+}
+
+
+@dataclass(frozen=True)
+class GenerationKey:
+    """一次生成结果的唯一标识（轻量、可哈希、可相等比较）。
+
+    包含：source identity、mode、target/requested width、pixel block size、
+    模式专属参数、invert。两把 key 完全相等 <=> 结果可判定为 current。
+    """
+    source_id: str          # source 身份（路径 + 尺寸 + 内容指纹）
+    mode: str
+    output_width: int
+    pixel_block_size: int
+    invert: bool
+    mode_params: tuple      # 模式专属参数，排序后的 (k, v) 元组，保证可哈希
+
+    @staticmethod
+    def _source_identity(path, shape, content_digest):
+        """source 身份：结合路径、尺寸与内容指纹，避免不同图片同参数误判。"""
+        h, w = (shape if shape else (0, 0))
+        parts = [str(path), f"{w}x{h}", str(content_digest)]
+        joined = "|".join(parts)
+        return hashlib.sha1(joined.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def from_state(cls, state, source_content_digest=None):
+        """从当前 AppState 构造 current key。"""
+        mode = state.current_mode
+        p = state.get_params(mode)
+        mp = tuple(sorted((k, p[k]) for k in _MODE_RESULT_KEYS[mode]))
+        return cls(
+            source_id=cls._source_identity(
+                state.source_path, state.source_shape, source_content_digest),
+            mode=mode,
+            output_width=int(p["output_width"]),
+            pixel_block_size=int(p["pixel_block_size"]),
+            invert=bool(p.get("invert", False)),
+            mode_params=mp,
         )
 
 
@@ -110,6 +162,11 @@ class AppState:
         # source 状态
         self.source_path = None
         self.source_shape = None  # (height, width) 或 None
+        self.source_digest = None  # source 内容指纹（见 set_source）
+        # 生成结果状态
+        self.generated_key = None      # GenerationKey 或 None
+        self.generated_result = None   # 正式 full-resolution BGR ndarray 或 None
+        self.busy = False              # 是否有生成任务在跑
 
     # ------------------------------------------------------------------ 模式
     def set_mode(self, mode: str):
@@ -183,12 +240,43 @@ class AppState:
         )
 
     # --------------------------------------------------------------- source
-    def set_source(self, path, shape):
-        """打开新 source：记录路径与 (h, w)。"""
+    def set_source(self, path, shape, content_digest=None):
+        """打开新 source：记录路径、(h, w) 与内容指纹。"""
         self.source_path = path
         self.source_shape = (int(shape[0]), int(shape[1]))
+        self.source_digest = content_digest
 
     @property
     def source_filename(self):
         import os
         return os.path.basename(self.source_path) if self.source_path else ""
+
+    # ------------------------------------------------ GenerationKey / 状态判定
+    def current_key(self) -> GenerationKey:
+        """当前 UI 状态实时计算的 key。"""
+        return GenerationKey.from_state(self, self.source_digest)
+
+    def has_result(self) -> bool:
+        return self.generated_result is not None
+
+    def is_current(self) -> bool:
+        """结果状态是否为 current（无结果 -> False）。"""
+        if self.generated_result is None or self.generated_key is None:
+            return False
+        return self.current_key() == self.generated_key
+
+    def is_stale(self) -> bool:
+        """存在结果但 key 不一致 -> stale。"""
+        return self.has_result() and not self.is_current()
+
+    def mark_generated(self, key, result):
+        """生成成功：记录 key 与正式 full-resolution 结果。"""
+        self.generated_key = key
+        self.generated_result = result
+
+    def save_enabled(self) -> bool:
+        """GUI-001B2 预留：Save PNG 的 enable 条件（本轮按钮仍禁用）。
+
+        条件：result 存在 且 为 current 且 当前无生成任务。
+        """
+        return self.has_result() and self.is_current() and not self.busy

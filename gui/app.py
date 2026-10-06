@@ -1,11 +1,13 @@
-"""GUI v1 主界面（Tkinter + ttk）—— GUI-001A 骨架轮。
+"""GUI v1 主界面（Tkinter + ttk）—— GUI-001B1。
 
-本轮范围（严格）：
-- 主窗口骨架、图片打开、Source Preview、模式参数面板、参数状态；
-- Source Preview 完整显示原图（fit + 居中，不裁切）；
-- Result Preview 仅空白占位（"No preview generated"），不接正式生成；
-- Generate Preview 可 disabled / 未接线；Save PNG 必须 disabled；
-- 不做 worker thread、不做 Save、不做打包、不自动实时生成。
+本轮在 GUI-001A 骨架上接通正式 Generate Preview：
+- 后台 worker thread 生成正式 full-resolution 结果（调用 src 后端，不复制算法）；
+- Result Preview 显示结果（display fit，二值 nearest）；
+- current / stale 状态（GenerationKey）、生成状态反馈、busy 期间禁用控件；
+- 参数改变/切模式/换图 -> stale（保留旧结果）；参数改回 -> 自动 current；
+- resize 只重新 fit，不重跑算法。
+
+本轮仍**不**实现 Save PNG（按钮 disabled，enable 逻辑已预留）、不打包。
 
 调用：python3.11 -m gui.app
 """
@@ -19,9 +21,20 @@ from tkinter import filedialog, ttk
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 from gui.state import AppState, MODE_LABELS, MODE_ORDER  # noqa: E402
 from gui.ui_helpers import render_fitted, render_placeholder  # noqa: E402
+from gui.worker import GenerationWorker  # noqa: E402
+
+# 状态文案（统一中文）
+TXT_READY = "就绪"
+TXT_GENERATING = "正在生成…"
+TXT_GENERATED = "预览已生成"
+TXT_STALE = "参数已更改，请重新生成"
+TXT_FAILED = "生成失败"
+TXT_NEW_SOURCE = "已打开新图片，请重新生成"
+PLACEHOLDER_RESULT = "尚未生成预览"
 
 
 class App(ttk.Frame):
@@ -34,6 +47,9 @@ class App(ttk.Frame):
         self._photo_refs = {}           # 持有 PhotoImage 引用，防 GC
         self._param_widgets = {}        # key -> 控件/变量，便于回填
         self._syncing = False           # 回填/重建控件期间抑制 trace 回调
+        self._worker = None             # 当前生成 worker（同一时间仅一个）
+        self._poll_job = None           # worker 轮询 job id
+        self._lock_widgets = []         # busy 期间需禁用的控件收集
 
         self.grid(row=0, column=0, sticky="nsew")
         master.rowconfigure(0, weight=1)
@@ -47,6 +63,7 @@ class App(ttk.Frame):
         self._sync_mode_ui()
         self._update_geometry_readout()
         self._refresh_source_preview()
+        self._refresh_result_placeholder()
 
     # ------------------------------------------------------------------ 顶栏
     def _build_topbar(self):
@@ -54,13 +71,13 @@ class App(ttk.Frame):
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         bar.columnconfigure(2, weight=1)
 
-        ttk.Button(bar, text="Open Image...", command=self.on_open).grid(
-            row=0, column=0, padx=(0, 8))
+        self.open_btn = ttk.Button(bar, text="打开图片...", command=self.on_open)
+        self.open_btn.grid(row=0, column=0, padx=(0, 8))
         self.filename_var = tk.StringVar(value="（未打开图片）")
         ttk.Label(bar, textvariable=self.filename_var).grid(row=0, column=1, sticky="w")
 
-        # 右侧预留 Save PNG（本轮 disabled）
-        self.save_btn = ttk.Button(bar, text="Save PNG...", state="disabled")
+        # 右侧 Save PNG（本轮 disabled；enable 逻辑已预留）
+        self.save_btn = ttk.Button(bar, text="保存 PNG...", state="disabled")
         self.save_btn.grid(row=0, column=3, sticky="e")
 
     # ------------------------------------------------------------------ 主体
@@ -79,8 +96,8 @@ class App(ttk.Frame):
         self.paned = ttk.PanedWindow(body, orient="horizontal")
         self.paned.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        src_frame = ttk.Labelframe(self.paned, text="Source Preview")
-        res_frame = ttk.Labelframe(self.paned, text="Result Preview")
+        src_frame = ttk.Labelframe(self.paned, text="原图预览")
+        res_frame = ttk.Labelframe(self.paned, text="效果预览")
         self.paned.add(src_frame, weight=1)
         self.paned.add(res_frame, weight=1)
 
@@ -133,22 +150,60 @@ class App(ttk.Frame):
             row=0, column=0, sticky="w", padx=4, pady=2)
 
         # Advanced / Output
-        adv = ttk.Labelframe(wrap, text="Advanced / Output")
+        adv = ttk.Labelframe(wrap, text="高级 / 输出")
         adv.grid(row=4, column=0, sticky="ew", pady=(0, 6))
         self.invert_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(adv, text="黑白反转", variable=self.invert_var,
-                        command=self.on_param_change).grid(
-            row=0, column=0, sticky="w", padx=4)
+        self.invert_chk = ttk.Checkbutton(adv, text="黑白反转", variable=self.invert_var,
+                                          command=self.on_param_change)
+        self.invert_chk.grid(row=0, column=0, sticky="w", padx=4)
 
-        # 操作按钮
+        # 操作按钮：生成预览为主按钮（加宽），恢复默认值为次级
         btns = ttk.Frame(wrap)
         btns.grid(row=5, column=0, sticky="ew", pady=(4, 0))
-        # Generate Preview：本轮 disabled / 未接线
-        self.gen_btn = ttk.Button(btns, text="Generate Preview", state="disabled")
-        self.gen_btn.grid(row=0, column=0, padx=2)
-        ttk.Button(btns, text="恢复默认值",
-                   command=self.on_restore_defaults).grid(row=1, column=0,
-                                                          padx=2, pady=(4, 0))
+        btns.columnconfigure(0, weight=1)
+        self.gen_btn = ttk.Button(btns, text="生成预览", command=self.on_generate)
+        self.gen_btn.grid(row=0, column=0, sticky="ew", padx=2, ipady=4)
+        self.restore_btn = ttk.Button(btns, text="恢复默认值",
+                                      command=self.on_restore_defaults)
+        self.restore_btn.grid(row=1, column=0, sticky="ew", padx=2, pady=(4, 0))
+
+    def _collect_lock_widgets(self):
+        """动态收集 busy 期间需要禁用的控件（模式/参数/按钮）。
+
+        每次切换 busy 前重新收集，避免模式专属参数重建后集合失效。
+        """
+        widgets = [self.open_btn, self.gen_btn, self.restore_btn, self.save_btn]
+
+        def walk(w):
+            for child in w.winfo_children():
+                if isinstance(child, (ttk.Radiobutton, ttk.Spinbox,
+                                      ttk.Checkbutton, ttk.Entry, ttk.Button)):
+                    widgets.append(child)
+                walk(child)
+
+        walk(self)
+        return widgets
+
+    def _set_busy(self, busy: bool):
+        """生成期间禁用/恢复控件。Save 始终保持 disabled。"""
+        self.state.busy = busy
+        new_state = "disabled" if busy else "normal"
+        for w in self._collect_lock_widgets():
+            try:
+                if w is self.save_btn:
+                    w.config(state="disabled")   # Save 恒禁用（本轮）
+                else:
+                    w.config(state=new_state)
+            except tk.TclError:
+                pass
+        if busy:
+            self.progress.grid()
+            self.progress.start(12)
+        else:
+            self.progress.stop()
+            self.progress.grid_remove()
+        # busy 结束后刷新 Save 的 enable 逻辑（本轮按钮仍禁用）
+        self._refresh_save_state()
 
     def _build_common_params(self, box):
         self.width_var = tk.StringVar()
@@ -291,7 +346,7 @@ class App(ttk.Frame):
 
     # -------------------------------------------------------------- 事件
     def on_param_change(self):
-        """参数变化：不运行算法，只更新 state + geometry readout。"""
+        """参数变化：不运行算法，只更新 state + geometry + stale 状态。"""
         if self._syncing:
             return
         self._read_widgets_into_state()
@@ -308,6 +363,7 @@ class App(ttk.Frame):
         if mode == "classic":
             self._update_b_hint()
         self._update_geometry_readout()
+        self._refresh_result_status()
 
     def _update_b_hint(self):
         t = self.state.get_param("t")
@@ -324,38 +380,123 @@ class App(ttk.Frame):
         self.state.set_mode(self.mode_var.get())
         self._sync_mode_ui()
         self._update_geometry_readout()
-        self.set_status(f"当前模式：{MODE_LABELS[self.state.current_mode][0]}")
+        # 不自动生成；旧结果保留，按 key 判定 current/stale
+        self._refresh_result_status()
+        if not self.state.has_result():
+            self.set_status(f"当前模式：{MODE_LABELS[self.state.current_mode][0]}")
 
     def on_restore_defaults(self):
         self.state.restore_defaults()   # 仅恢复当前模式
         self._sync_mode_ui()
         self._update_geometry_readout()
-        self.set_status(f"已恢复 {MODE_LABELS[self.state.current_mode][0]} 默认值")
+        self._refresh_result_status()
+        if not self.state.has_result():
+            self.set_status(f"已恢复 {MODE_LABELS[self.state.current_mode][0]} 默认值")
 
     # -------------------------------------------------------------- 打开图片
     def on_open(self):
         path = filedialog.askopenfilename(
-            title="Open Image",
+            title="打开图片",
             filetypes=[
-                ("Images", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
-                ("All files", "*.*"),
+                ("图片", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
+                ("所有文件", "*.*"),
             ],
         )
         if not path:
             return
+        self._load_source(path)
+
+    def _load_source(self, path):
+        """加载 source（供 filedialog 与测试直接调用）。"""
         img = cv2.imread(path, cv2.IMREAD_COLOR)
         if img is None:
             self.set_status(f"无法读取图片：{path}")
             return
         self.source_bgr = img
         h, w = img.shape[:2]
-        self.state.set_source(path, (h, w))
+        digest = self._source_digest(img)
+        self.state.set_source(path, (h, w), content_digest=digest)
         self.filename_var.set(f"{os.path.basename(path)}  ({w}×{h})")
-        self.set_status(f"已打开：{os.path.basename(path)}")
         self._refresh_source_preview()
         self._update_geometry_readout()
-        # Result 保持占位（本轮不生成）
-        self._refresh_result_placeholder()
+        # 新 source：旧结果保留但立即 stale；不自动生成
+        self._refresh_result_status()
+        if self.state.has_result():
+            self.set_status(TXT_NEW_SOURCE)
+        else:
+            self.set_status(f"已打开：{os.path.basename(path)}")
+
+    @staticmethod
+    def _source_digest(img_bgr):
+        """source 内容指纹（尺寸 + 采样像素），用于 GenerationKey 的 source identity。"""
+        import hashlib
+        h, w = img_bgr.shape[:2]
+        # 采样以避免大图哈希过慢；尺寸也纳入
+        step_h = max(1, h // 64)
+        step_w = max(1, w // 64)
+        sample = img_bgr[::step_h, ::step_w]
+        m = hashlib.sha1()
+        m.update(f"{w}x{h}".encode("ascii"))
+        m.update(np.ascontiguousarray(sample).tobytes())
+        return m.hexdigest()
+
+    # -------------------------------------------------------------- 生成
+    def on_generate(self):
+        """点击「生成预览」：启动后台 worker（同一时间仅一个）。"""
+        if self._worker is not None:
+            # 已有任务在跑，忽略重复点击
+            return
+        if self.source_bgr is None:
+            self.set_status("请先打开图片")
+            return
+        # 确保控件值已写入 state
+        self._read_widgets_into_state()
+        mode = self.state.current_mode
+        params = self.state.get_params(mode)
+        key = self.state.current_key()
+
+        self._set_busy(True)
+        self.set_status(TXT_GENERATING)
+        self._worker = GenerationWorker(
+            self, mode, params, self.source_bgr.copy(), key)
+        self._worker.start()
+        self._schedule_poll()
+
+    def _schedule_poll(self):
+        self._poll_job = self.after(60, self._poll_worker)
+
+    def _poll_worker(self):
+        """主线程轮询 worker 结果；完成后回主线程更新 UI。"""
+        self._poll_job = None
+        if self._worker is None:
+            return
+        ok, payload = self._worker.poll()
+        if ok is None:
+            # 未完成，继续轮询
+            self._schedule_poll()
+            return
+        worker = self._worker
+        self._worker = None
+        if ok:
+            self._on_generate_success(worker.key, payload)
+        else:
+            self._on_generate_failure(payload)
+
+    def _on_generate_success(self, key, result):
+        self.state.mark_generated(key, result)
+        self._set_busy(False)
+        self._refresh_result_preview()
+        self._refresh_result_status()
+        # 生成成功时 key 必等于 current（参数未变）；若期间被改则 stale
+        if self.state.is_current():
+            self.set_status(TXT_GENERATED)
+        else:
+            self.set_status(TXT_STALE)
+
+    def _on_generate_failure(self, exc):
+        self._set_busy(False)
+        self.set_status(f"{TXT_FAILED}：{type(exc).__name__}: {exc}")
+        # 保留旧结果（若有）；不清空
 
     # -------------------------------------------------------------- 预览
     def _refresh_source_preview(self):
@@ -365,11 +506,42 @@ class App(ttk.Frame):
         if res is not None:
             self._photo_refs["source"] = res[0]
 
+    def _refresh_result_preview(self):
+        """显示正式 result（display fit，二值 nearest）或占位。"""
+        if self.state.generated_result is None:
+            self._refresh_result_placeholder()
+            return
+        res = render_fitted(self.result_canvas, self.state.generated_result,
+                            nearest=True)
+        if res is not None:
+            self._photo_refs["result"] = res[0]
+
     def _refresh_result_placeholder(self):
-        render_placeholder(self.result_canvas, "No preview generated")
+        render_placeholder(self.result_canvas, PLACEHOLDER_RESULT)
+
+    def _refresh_result_status(self):
+        """根据 key 判定刷新状态文本与 Save enable 逻辑（不重跑算法）。"""
+        self._refresh_save_state()
+        if not self.state.has_result():
+            return
+        if self.state.is_current():
+            # 参数已改回生成时状态 -> 自动恢复 current
+            if not self.state.busy:
+                self.set_status(TXT_GENERATED)
+        else:
+            if not self.state.busy:
+                self.set_status(TXT_STALE)
+
+    def _refresh_save_state(self):
+        """GUI-001B2 预留：按 save_enabled() 逻辑决定 Save 的可用性。
+
+        本轮按钮**始终** disabled；此处只记录逻辑状态（并可用于测试）。
+        """
+        self._save_should_be_enabled = self.state.save_enabled()
+        self.save_btn.config(state="disabled")
 
     def _on_preview_configure(self, event=None):
-        """窗口/窗格 resize：debounce 后仅重建 display preview。"""
+        """窗口/窗格 resize：debounce 后仅重建 display preview（不重跑算法）。"""
         if self._preview_job is not None:
             self.after_cancel(self._preview_job)
         self._preview_job = self.after(80, self._redraw_previews)
@@ -377,21 +549,26 @@ class App(ttk.Frame):
     def _redraw_previews(self):
         self._preview_job = None
         self._refresh_source_preview()
-        # Result 本轮恒为占位
-        self._refresh_result_placeholder()
+        # Result：只重新 fit 当前 result，不运行算法
+        self._refresh_result_preview()
 
     # -------------------------------------------------------------- 状态栏
     def _build_statusbar(self):
-        self.status_var = tk.StringVar(value="就绪")
+        self.status_var = tk.StringVar(value=TXT_READY)
         bar = ttk.Frame(self)
         bar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         bar.columnconfigure(0, weight=1)
         ttk.Label(bar, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-        ttk.Label(bar, text="GUI-001A 骨架轮：Generate/Save 未接线").grid(
-            row=0, column=1, sticky="e")
+        # 轻量 indeterminate 进度条（生成期间显示，无百分比）
+        self.progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
+        self.progress.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.progress.grid_remove()
+        self.hint_var = tk.StringVar(value="GUI-001B1：生成已接线；Save 未接线")
+        ttk.Label(bar, textvariable=self.hint_var).grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     def set_status(self, text):
-        self.status_var.set(text)
+        if hasattr(self, "status_var"):
+            self.status_var.set(text)
 
 
 def main():
