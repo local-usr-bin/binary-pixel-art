@@ -1,12 +1,14 @@
 # Git 行尾策略（EOL policy）
 #
-# legacy/ 下的三份 .py 是「考古原件」：必须逐字节保存（byte-preserved
-# archival assets）。它们的 SHA-256 被测试用作基准，任何 LF/CRLF 转换都会
-# 改变工作区字节并导致 SHA 校验失败。
+# legacy/ 下的三份 .py 是「历史文本原件」（archival text sources），必须
+# 保持 LF 字节表示。它们的 SHA-256 被测试用作基准。
 #
-# `-text` 表示对这些文件禁用 Git 的行尾转换：无论在何平台
-# checkout / checkin，Git 都按原始字节处理，不做 LF <-> CRLF 归一化。
+# 契约：这些文件**始终保持 LF 表示**（而不是「当作二进制文件」）。
 #
-# 注意：这里**只**保护 legacy/*.py，不强制整个仓库统一 LF/CRLF，
+# `text eol=lf` 明确声明：这些文件在 index 与 working tree 中都用 LF，
+# 并**覆盖** Windows 系统级 core.autocrlf=true 的 CRLF 转换，
+# 保证任何平台 checkout 到 working tree 时仍为 LF。
+#
+# 注意：这里只约束 legacy/*.py，不强制整个仓库统一 EOL，
 # 也不修改任何 core.autocrlf 配置。
-legacy/*.py -text
+legacy/*.py text eol=lf
