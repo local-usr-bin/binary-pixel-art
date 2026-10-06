@@ -15,7 +15,7 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 # 允许 `python3.11 -m gui.app` 与直接运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +26,7 @@ import numpy as np  # noqa: E402
 from gui.state import AppState, MODE_LABELS, MODE_ORDER  # noqa: E402
 from gui.ui_helpers import render_fitted, render_placeholder  # noqa: E402
 from gui.worker import GenerationWorker  # noqa: E402
+from gui import save as save_mod  # noqa: E402
 
 # 状态文案（统一中文）
 TXT_READY = "就绪"
@@ -35,6 +36,7 @@ TXT_STALE = "参数已更改，请重新生成"
 TXT_FAILED = "生成失败"
 TXT_NEW_SOURCE = "已打开新图片，请重新生成"
 PLACEHOLDER_RESULT = "尚未生成预览"
+TXT_SAVE_FAILED = "保存失败"
 
 
 class App(ttk.Frame):
@@ -64,6 +66,7 @@ class App(ttk.Frame):
         self._update_geometry_readout()
         self._refresh_source_preview()
         self._refresh_result_placeholder()
+        self._refresh_save_state()      # 无结果 -> Save disabled
 
     # ------------------------------------------------------------------ 顶栏
     def _build_topbar(self):
@@ -76,8 +79,9 @@ class App(ttk.Frame):
         self.filename_var = tk.StringVar(value="（未打开图片）")
         ttk.Label(bar, textvariable=self.filename_var).grid(row=0, column=1, sticky="w")
 
-        # 右侧 Save PNG（本轮 disabled；enable 逻辑已预留）
-        self.save_btn = ttk.Button(bar, text="保存 PNG...", state="disabled")
+        # 右侧 Save PNG（enable 由 current-only 规则驱动）
+        self.save_btn = ttk.Button(bar, text="保存 PNG...", state="disabled",
+                                   command=self.on_save)
         self.save_btn.grid(row=0, column=3, sticky="e")
 
     # ------------------------------------------------------------------ 主体
@@ -185,15 +189,14 @@ class App(ttk.Frame):
         return widgets
 
     def _set_busy(self, busy: bool):
-        """生成期间禁用/恢复控件。Save 始终保持 disabled。"""
+        """生成期间禁用/恢复控件。Save 的可用性由 current-only 规则驱动。"""
         self.state.busy = busy
         new_state = "disabled" if busy else "normal"
         for w in self._collect_lock_widgets():
+            if w is self.save_btn:
+                continue                     # Save 由 _refresh_save_state 统一决定
             try:
-                if w is self.save_btn:
-                    w.config(state="disabled")   # Save 恒禁用（本轮）
-                else:
-                    w.config(state=new_state)
+                w.config(state=new_state)
             except tk.TclError:
                 pass
         if busy:
@@ -202,7 +205,7 @@ class App(ttk.Frame):
         else:
             self.progress.stop()
             self.progress.grid_remove()
-        # busy 结束后刷新 Save 的 enable 逻辑（本轮按钮仍禁用）
+        # busy 结束/开始时刷新 Save 的 enable 逻辑
         self._refresh_save_state()
 
     def _build_common_params(self, box):
@@ -533,12 +536,59 @@ class App(ttk.Frame):
                 self.set_status(TXT_STALE)
 
     def _refresh_save_state(self):
-        """GUI-001B2 预留：按 save_enabled() 逻辑决定 Save 的可用性。
+        """按 current-only 规则刷新 Save 按钮的 enable 状态。
 
-        本轮按钮**始终** disabled；此处只记录逻辑状态（并可用于测试）。
+        规则（复用 state.save_enabled()，不另写第二套判断）：
+          result 存在 且 为 current 且 无 worker 在跑 -> enabled，否则 disabled。
         """
-        self._save_should_be_enabled = self.state.save_enabled()
-        self.save_btn.config(state="disabled")
+        enabled = self.state.save_enabled()
+        self._save_should_be_enabled = enabled
+        try:
+            self.save_btn.config(state="normal" if enabled else "disabled")
+        except tk.TclError:
+            pass
+
+    # -------------------------------------------------------------- 保存 PNG
+    def on_save(self):
+        """「保存 PNG...」：把 full-resolution current result 写为 PNG。
+
+        - 不重新运行算法；
+        - 保存的是 AppState.generated_result（非 preview / 非截图）；
+        - 用户取消对话框 -> 不写文件、不报错、状态不变。
+        """
+        if not self.state.save_enabled():
+            # 防御：按钮本应 disabled；被外部误调用时直接忽略
+            return
+        result = self.state.generated_result
+        if result is None:
+            return
+        default_name = save_mod.default_filename(self.state.source_path,
+                                                 self.state.current_mode)
+        path = filedialog.asksaveasfilename(
+            title="保存 PNG",
+            defaultextension=".png",
+            initialfile=default_name,
+            filetypes=[("PNG 图片", "*.png"), ("所有文件", "*.*")],
+        )
+        if not path:
+            # 用户取消：不写文件、不报错、状态不变
+            return
+        self._save_result_to(path, result)
+
+    def _save_result_to(self, path, result):
+        """执行保存并更新状态栏（供 on_save 与测试直接调用）。"""
+        try:
+            save_mod.save_png(path, result)
+        except Exception as exc:  # noqa: BLE001 —— 任何保存异常都要提示且不崩溃
+            self.set_status(f"{TXT_SAVE_FAILED}：{exc}")
+            messagebox.showerror("保存失败", f"无法保存图片：\n{exc}")
+            # current result 保留在内存，key 不变，可再次尝试
+            return False
+        name = os.path.basename(path)
+        self.set_status(f"已保存：{name}")
+        # 不变 stale，generated_key 不变，Save 继续可用
+        self._refresh_save_state()
+        return True
 
     def _on_preview_configure(self, event=None):
         """窗口/窗格 resize：debounce 后仅重建 display preview（不重跑算法）。"""
@@ -563,7 +613,7 @@ class App(ttk.Frame):
         self.progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
         self.progress.grid(row=0, column=1, sticky="e", padx=(8, 0))
         self.progress.grid_remove()
-        self.hint_var = tk.StringVar(value="GUI-001B1：生成已接线；Save 未接线")
+        self.hint_var = tk.StringVar(value="GUI-001B2：生成 + 保存 PNG 已接线")
         ttk.Label(bar, textvariable=self.hint_var).grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     def set_status(self, text):
