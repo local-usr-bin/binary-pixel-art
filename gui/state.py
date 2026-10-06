@@ -31,7 +31,7 @@ from src.params import (
 # 四种正式模式的显示名与简短辅助说明（不在状态层放长文）。
 MODE_LABELS = {
     "classic": ("Classic", "稀疏点阵"),
-    "bayer4": ("Bayer 4×4", "规则网点"),
+    "bayer4": ("Bayer", "规则网点"),
     "adaptive_fine": ("Adaptive Fine", "细密墨线"),
     "adaptive_bold": ("Adaptive Bold", "粗块木刻"),
 }
