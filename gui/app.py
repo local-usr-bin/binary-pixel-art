@@ -20,8 +20,9 @@ from tkinter import filedialog, messagebox, ttk
 # 允许 `python3.11 -m gui.app` 与直接运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cv2  # noqa: E402
 import numpy as np  # noqa: E402
+
+from src import imageio  # noqa: E402
 
 from gui.state import AppState, MODE_LABELS, MODE_ORDER  # noqa: E402
 from gui.ui_helpers import render_fitted, render_placeholder  # noqa: E402
@@ -410,10 +411,19 @@ class App(ttk.Frame):
         self._load_source(path)
 
     def _load_source(self, path):
-        """加载 source（供 filedialog 与测试直接调用）。"""
-        img = cv2.imread(path, cv2.IMREAD_COLOR)
-        if img is None:
-            self.set_status(f"无法读取图片：{path}")
+        """加载 source（供 filedialog 与测试直接调用）。
+
+        使用 Unicode-safe 读取（Path.read_bytes + cv2.imdecode），
+        Windows 上含中文/Unicode 的路径也能正常打开。
+        解码 flag 与既有 cv2.imread(path, IMREAD_COLOR) 完全一致。
+        """
+        try:
+            img = imageio.imread_unicode(path)
+        except imageio.ImageReadError as exc:
+            self.set_status(f"无法读取图片：{exc}")
+            return
+        except imageio.ImageDecodeError as exc:
+            self.set_status(f"无法解码图片：{exc}")
             return
         self.source_bgr = img
         h, w = img.shape[:2]
