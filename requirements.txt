@@ -1,0 +1,5 @@
+# Runtime dependencies（源码运行 GUI 所需，最终 Windows release 的精确版本
+# 将在真实 Windows build 环境中另行记录，此处不锁版本）。
+numpy
+opencv-python
+Pillow

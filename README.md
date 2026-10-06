@@ -31,33 +31,40 @@ Pseudo-pixel image processing project.
 生成一张无版权争议的程序化测试图，并对它跑一次四模式输出：
 
 ```bash
-python3.11 tools/make_test_image.py
-python3.11 -m tools.run_experiment outputs/test_input.png -o outputs
+python tools/make_test_image.py
+python -m tools.run_experiment outputs/test_input.png -o outputs
 ```
 
 对你自己的图片生成四张结果：
 
 ```bash
-python3.11 -m tools.run_experiment /path/to/your_image.png -o outputs
+python -m tools.run_experiment /path/to/your_image.png -o outputs
 ```
 
 会输出 `classic / bayer4 / adaptive_fine / adaptive_bold` 四张严格黑白图，外加一张 2×2 contact sheet 便于并排比较。
 
-## GUI（骨架）
+## GUI
+
+从源码启动：
 
 ```bash
-python3.11 -m gui.app
+python -m pip install -r requirements.txt
+python -m gui.app
 ```
 
-当前为 **GUI-001A 骨架轮**：图片打开、Source Preview、四模式参数面板与参数状态。
-Generate Preview / Save PNG 为未接线占位（disabled），不含正式生成与保存。
+GUI 已支持：打开图片、四模式参数面板、Generate Preview、current/stale 状态、
+Save PNG、黑白反转（Invert）与彩色填充（Color Fill）全局输出选项。
+
+当前目标平台为 **Windows 10/11 x64**，Python 3.13；v1 真人验证环境为
+Python 3.13.16，Tkinter/Tcl-Tk 来自对应 Python 的 Windows 安装。
 
 ## 测试
 
 ```bash
-python3.11 -m pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
 ## 依赖
 
-`opencv-python`（cv2）、`numpy`；测试用 `pytest`。不使用任何 AI / 神经网络依赖。
+Runtime 第三方依赖（见 `requirements.txt`）：`numpy`、`opencv-python`、`Pillow`；
+测试用 `pytest`（见 `requirements-dev.txt`）。不使用任何 AI / 神经网络依赖。

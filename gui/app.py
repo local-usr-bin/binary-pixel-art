@@ -681,8 +681,6 @@ class App(ttk.Frame):
         self.progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
         self.progress.grid(row=0, column=1, sticky="e", padx=(8, 0))
         self.progress.grid_remove()
-        self.hint_var = tk.StringVar(value="GUI-001B2：生成 + 保存 PNG 已接线")
-        ttk.Label(bar, textvariable=self.hint_var).grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     def set_status(self, text):
         if hasattr(self, "status_var"):
