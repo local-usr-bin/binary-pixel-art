@@ -140,13 +140,42 @@ def default_params(mode: str) -> dict:
 
 
 def normalize_block_size(value) -> int:
-    """把 blockSize 规范为合法奇数（>=3）。用于 UI 步长 2 的输入收敛。"""
+    """把 blockSize 规范为合法奇数（>=3）。
+
+    规则（固定、确定性，产品契约）：
+      - < 3        -> 3
+      - 偶数 n     -> n + 1（例如 12 -> 13，与向上步进直觉一致）
+    """
     v = int(value)
     if v < 3:
         v = 3
     if v % 2 == 0:
         v += 1
     return v
+
+
+def is_editable_block_size_text(text) -> bool:
+    """判断文本是否为 blockSize 编辑期允许的「中间态」。
+
+    允许：空字符串 ""、纯数字串（如 "1" / "12" / "123"）。
+    不允许：含非数字字符的文本（编辑期直接拒绝）。
+    用于 Spinbox validatecommand，保证用户可以「全选 -> 直接键入」。
+    """
+    if text == "":
+        return True
+    return text.isdigit()
+
+
+def commit_block_size_text(text, last_valid: int) -> int:
+    """把编辑框文本提交为合法 blockSize（确定性）。
+
+    - 空 或 非数字 -> 恢复 last_valid（不崩、不写入空串）
+    - 数字        -> normalize_block_size（<3 -> 3；偶数 -> +1）
+    """
+    s = (text or "").strip()
+    if s == "" or not s.isdigit():
+        return int(last_valid)
+    return normalize_block_size(int(s))
 
 
 class AppState:

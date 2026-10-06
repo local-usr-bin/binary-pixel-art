@@ -23,6 +23,8 @@ from gui.state import (
     AppState,
     default_params,
     normalize_block_size,
+    is_editable_block_size_text,
+    commit_block_size_text,
     MODE_ORDER,
     MODE_LABELS,
     GeometryReadout,
@@ -224,6 +226,52 @@ def test_block_size_always_odd_via_state(mode):
     for bad in (4, 6, 10, 2, 0, 1):
         stored = st.set_param("block_size", bad, mode=mode)
         assert stored >= 3 and stored % 2 == 1
+
+
+# ---------------------------------------------------------------------------
+# 5b. blockSize 编辑中间态 / 提交合法化（修复「全选键入」bug）
+# ---------------------------------------------------------------------------
+
+def test_is_editable_block_size_text():
+    # 允许中间态：空串 / 纯数字
+    assert is_editable_block_size_text("") is True
+    assert is_editable_block_size_text("1") is True
+    assert is_editable_block_size_text("12") is True
+    assert is_editable_block_size_text("123") is True
+    # 非法字符不允许
+    assert is_editable_block_size_text("a") is False
+    assert is_editable_block_size_text("1a") is False
+    assert is_editable_block_size_text("-1") is False
+    assert is_editable_block_size_text(" ") is False
+    assert is_editable_block_size_text("1.5") is False
+
+
+def test_commit_block_size_text_rules():
+    # 数字 -> normalize（<3 -> 3；偶数 -> +1）
+    assert commit_block_size_text("9", 11) == 9
+    assert commit_block_size_text("25", 11) == 25
+    assert commit_block_size_text("11", 25) == 11
+    assert commit_block_size_text("12", 13) == 13       # 偶数 -> +1
+    assert commit_block_size_text("1", 13) == 3         # <3 -> 3
+    assert commit_block_size_text("2", 11) == 3
+    assert commit_block_size_text("0", 11) == 3
+    # 空 / 非数字 -> 恢复 last valid
+    assert commit_block_size_text("", 13) == 13
+    assert commit_block_size_text("   ", 13) == 13
+    assert commit_block_size_text("abc", 13) == 13
+    assert commit_block_size_text("1a", 25) == 25
+
+
+@pytest.mark.parametrize("mode", ["adaptive_fine", "adaptive_bold"])
+def test_app_state_never_receives_empty_block_size(mode):
+    """空串提交不应把 "" 写入 state（保持原值）。"""
+    st = AppState()
+    default = st.get_param("block_size", mode)
+    # 模拟：读入中间态空串 -> 跳过写入（由 commit 恢复 last valid）
+    committed = commit_block_size_text("", default)
+    st.set_param("block_size", committed, mode=mode)
+    assert st.get_param("block_size", mode) == default
+    assert isinstance(st.get_param("block_size", mode), int)
 
 
 # ---------------------------------------------------------------------------

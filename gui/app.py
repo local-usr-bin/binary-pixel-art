@@ -24,6 +24,7 @@ import numpy as np  # noqa: E402
 
 from src import imageio  # noqa: E402
 
+from gui import state as state_mod  # noqa: E402
 from gui.state import AppState, MODE_LABELS, MODE_ORDER  # noqa: E402
 from gui.ui_helpers import render_fitted, render_placeholder  # noqa: E402
 from gui.worker import GenerationWorker  # noqa: E402
@@ -269,8 +270,20 @@ class App(ttk.Frame):
             self.c_var = tk.StringVar(value=str(p["c"]))
             label = "细节尺度 blockSize" if mode == "adaptive_fine" else "结构尺度 blockSize"
             ttk.Label(self.specific_box, text=label).grid(row=0, column=0, sticky="w", padx=4)
-            ttk.Spinbox(self.specific_box, from_=3, to=999, increment=2, width=8,
-                        textvariable=self.block_size_var).grid(row=0, column=1, sticky="w")
+            # blockSize：编辑期允许中间态（""/纯数字），提交时再合法化。
+            # validatecommand 只拦非法字符（如字母），不强制奇数/>=3，
+            # 以保证「全选 -> 直接键入」能正常替换，不被每键回写打断。
+            vcmd = (self.register(self._validate_block_text), "%P")
+            self.block_size_spin = ttk.Spinbox(
+                self.specific_box, from_=3, to=999, increment=2, width=8,
+                textvariable=self.block_size_var,
+                validate="key", validatecommand=vcmd)
+            self.block_size_spin.grid(row=0, column=1, sticky="w")
+            # 提交时机：Enter / 失焦 / 上下箭头
+            self.block_size_spin.bind("<Return>", self._commit_block_size)
+            self.block_size_spin.bind("<FocusOut>", self._commit_block_size)
+            self.block_size_spin.bind("<Up>", self._commit_block_size)
+            self.block_size_spin.bind("<Down>", self._commit_block_size)
             ttk.Label(self.specific_box, text="黑白偏移 C").grid(row=1, column=0, sticky="w", padx=4)
             ttk.Spinbox(self.specific_box, from_=-64, to=64, width=8,
                         textvariable=self.c_var).grid(row=1, column=1, sticky="w")
@@ -335,11 +348,9 @@ class App(ttk.Frame):
             if hasattr(self, "matrix_var"):
                 updates["matrix_size"] = int(self.matrix_var.get())
         elif mode in ("adaptive_fine", "adaptive_bold"):
-            if hasattr(self, "block_size_var"):
-                try:
-                    updates["block_size"] = int(self.block_size_var.get())
-                except (ValueError, tk.TclError):
-                    pass
+            # blockSize 不在按键时写入 state：编辑中间态（""/部分数字）不进入
+            # GenerationKey；只有 _commit_block_size（Enter/失焦/箭头）提交
+            # 合法值后才更新 state。
             if hasattr(self, "c_var"):
                 try:
                     updates["c"] = int(self.c_var.get())
@@ -350,24 +361,46 @@ class App(ttk.Frame):
 
     # -------------------------------------------------------------- 事件
     def on_param_change(self):
-        """参数变化：不运行算法，只更新 state + geometry + stale 状态。"""
+        """参数变化：不运行算法，只更新 state + geometry + stale 状态。
+
+        注意：blockSize 不回写控件——编辑期（含中间态 ""/12）保持用户输入，
+        合法化只在 _commit_block_size（Enter/失焦/箭头）时进行。
+        """
         if self._syncing:
             return
         self._read_widgets_into_state()
-        # blockSize 规范化后回填（保证 UI 显示合法奇数）
         mode = self.state.current_mode
-        if mode in ("adaptive_fine", "adaptive_bold"):
-            norm = self.state.get_param("block_size")
-            if str(norm) != self.block_size_var.get():
-                self._syncing = True
-                try:
-                    self.block_size_var.set(str(norm))
-                finally:
-                    self._syncing = False
         if mode == "classic":
             self._update_b_hint()
         self._update_geometry_readout()
         self._refresh_result_status()
+
+    def _validate_block_text(self, proposed) -> bool:
+        """Spinbox validatecommand：编辑期只拦非法字符，不强制奇数/>=3。
+
+        允许中间态（""/纯数字），因此用户可「全选 -> 直接键入」。
+        """
+        return state_mod.is_editable_block_size_text(proposed)
+
+    def _commit_block_size(self, event=None):
+        """提交 blockSize：Enter / 失焦 / 上下箭头时合法化并写回。
+
+        空 或 非数字 -> 恢复 last valid；数字 -> normalize（<3->3；偶数->+1）。
+        """
+        last_valid = self.state.get_param("block_size")
+        committed = state_mod.commit_block_size_text(
+            self.block_size_var.get(), last_valid)
+        self._syncing = True
+        try:
+            self.block_size_var.set(str(committed))
+        finally:
+            self._syncing = False
+        # 合法提交才写入 state（影响 GenerationKey / stale）
+        self.state.set_param("block_size", committed)
+        self._update_geometry_readout()
+        self._refresh_result_status()
+        # Spinbox 上下箭头：允许默认步进行为继续（不 return "break"）
+        return None
 
     def _update_b_hint(self):
         t = self.state.get_param("t")
