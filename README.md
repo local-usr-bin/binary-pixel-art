@@ -6,9 +6,22 @@ Pseudo-pixel image processing project.
 可选 **Color Fill（彩色填充）** 使用该硬边界 mask 显示原图连续色彩纹理，
 即 mask 黑处取原图颜色、白处保持纯白，mask 边界始终严格锐利。
 
+## 下载
+
+[**下载 Windows x64 绿色版 v1.0.0**](https://github.com/local-usr-bin/binary-pixel-art/releases/download/v1.0.0/binary-pixel-art-v1.0.0-win-x64.zip)
+
+- Windows 10 / 11 x64
+- 解压完整目录后运行 `binary-pixel-art.exe`
+- SHA-256：`ABB6F3A5F33F05BBEAF0E16680381AC8913C943FDB1697A8A4FEFF4E8C652228`
+- [查看 v1.0.0 Release 页面](https://github.com/local-usr-bin/binary-pixel-art/releases/tag/v1.0.0)
+
+## 效果示例
+
+![binary-pixel-art v1.0.0 效果示例](docs/assets/v1-showcase.png)
+
 正式产品模式共 **4 种**（详见 `docs/four_modes.md`）：
 
-- `classic` — 用户早年算法，语义冻结（权威依据：`docs/classic_algorithm.md`）
+- `classic` — 项目早期脚本复刻的稀疏点阵算法，语义冻结（权威依据：`docs/classic_algorithm.md`）
 - `bayer4` — Bayer 4×4 有序抖动，规则网点
 - `adaptive_fine` — Adaptive Gaussian（11, C=2），细密云纹/墨线/蚀刻感
 - `adaptive_bold` — Adaptive Mean（25, C=2），粗块/木刻/海报感
